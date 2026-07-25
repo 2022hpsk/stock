@@ -136,7 +136,16 @@ plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["akshare.*", "baostock.*", "tushare.*", "feedparser.*", "plotly.*", "xtquant.*"]
+module = [
+    "akshare.*",
+    "baostock.*",
+    "tushare.*",
+    "feedparser.*",
+    "plotly.*",
+    "xtquant.*",
+    "pyarrow.*",
+    "duckdb.*",
+]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest
