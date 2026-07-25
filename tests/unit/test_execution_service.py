@@ -259,3 +259,52 @@ class TestManualChannel:
         assert "买入" in line
         assert "600519.SH" in line
         assert "100 股" in line
+
+
+class TestOrderPriceIsTradeable:
+    """委托价必须对齐到 0.01（端到端发现的缺陷）。
+
+    ``price_high = 1587 × 1.006 = 1596.522`` 这样的价格在券商 App 里输不进去。
+    手工通道是 miniQMT 停开后的主力通道，清单上印一个下不了的价格，
+    用户只能自己瞎凑一个数。
+    """
+
+    def test_preview_limit_price_is_on_the_tick(self, tmp_path: Path) -> None:
+        service = ExecutionService(make_settings(tmp_path))
+        target = plan(intent(A, price="1587", intent_id="i1"))
+        limit = service.preview(target, current_prices={}).items[0].limit_price
+        assert limit == limit.quantize(Decimal("0.01"))
+
+    def test_buy_rounds_up_sell_rounds_down(self, tmp_path: Path) -> None:
+        # 取整方向按保住成交概率来定
+        service = ExecutionService(make_settings(tmp_path))
+        target = plan(
+            intent(A, price="1587", intent_id="i1"),
+            intent(B, side=Side.SELL, price="1587", intent_id="i2"),
+        )
+        buy, sell = service.preview(target, current_prices={}).items
+        assert buy.limit_price >= buy.price_high
+        assert sell.limit_price <= sell.price_low
+
+    def test_submitted_order_matches_the_preview(self, tmp_path: Path) -> None:
+        # 用户确认的价格必须就是系统提交的价格
+        service = ExecutionService(make_settings(tmp_path))
+        target = plan(intent(A, qty=50, price="1587", intent_id="i1"))
+        service.store.save(target)
+        previewed = service.preview(target, current_prices={}).items[0].limit_price
+
+        report = service.execute(
+            target, decisions=[accept("i1")], current_prices={}, confirmed_by="张三"
+        )
+        assert report.submitted[0].price == previewed
+
+    def test_manual_checklist_price_is_tradeable(self, tmp_path: Path) -> None:
+        service = ExecutionService(make_settings(tmp_path, broker="manual"))
+        target = plan(intent(A, qty=50, price="1587", intent_id="i1"))
+        service.store.save(target)
+
+        report = service.execute(
+            target, decisions=[accept("i1")], current_prices={}, confirmed_by="张三"
+        )
+        line = report.manual_checklist[0]
+        assert "1596.53" in line, f"清单上的价格必须能直接照抄：{line}"

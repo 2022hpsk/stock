@@ -354,3 +354,67 @@ def test_event_type_coverage_is_complete() -> None:
 
     missing = [e.value for e in EventType if e not in EVENT_SENTIMENT_PRIOR]
     assert missing == []
+
+
+class TestIngestRunsThePipeline:
+    """外置导入必须走完整流水线（端到端发现的缺陷）。
+
+    曾经 ``intel inbox`` / ``note`` / ``import`` 都是直接 ``store.write()``，
+    跳过了分类、打分与黑名单评估：条目进了库，但 ``event_type=None``、
+    ``importance=0``，一条"立案调查"公告既不触发禁买、也不进日报重大消息区。
+
+    单元测试全都走 ``fetch()``，所以一直没发现；端到端跑一遍立刻暴露。
+    """
+
+    def test_ingest_classifies_scores_and_blacklists(self, tmp_path: Path) -> None:
+        service = make_service(tmp_path)
+        raw = item(
+            "贵州茅台收到中国证监会立案调查通知书",
+            source="external:inbox",
+            tier=SourceTier.OFFICIAL,
+            url="https://sse.com.cn/n/1",
+        )
+        assert raw.event_type is None, "入库前是未分类的原始条目"
+
+        result = service.ingest([raw])
+        stored = result.items[0]
+
+        assert stored.event_type is EventType.REGULATORY_PROBE
+        assert stored.importance >= 80
+        assert stored.sentiment < 0
+        assert service.is_blocked(MAOTAI)
+
+    def test_inbox_path_reaches_the_blacklist(self, tmp_path: Path) -> None:
+        # 验收 5 的完整路径：往收件箱丢个文件 → 自动禁买
+        service = make_service(tmp_path)
+        service.scan_inbox()
+        (service.inbox_dir / "probe.md").write_text(
+            "---\n"
+            "symbols: [600519.SH]\n"
+            "source_tier: OFFICIAL\n"
+            "url: https://sse.com.cn/n/1\n"
+            "title: 贵州茅台收到中国证监会立案调查通知书\n"
+            "---\n正文\n",
+            encoding="utf-8",
+        )
+        report = service.scan_inbox()
+        service.ingest(report.items)
+        assert service.is_blocked(MAOTAI)
+
+    def test_undeclared_domain_does_not_pin_the_item(self, tmp_path: Path) -> None:
+        # 外置导入未写 domain 时兜底为 COMPANY。若流水线把兜底值当成"源方声明"，
+        # 一条讲降准的随手记会被永远钉在个股域，宏观段里根本看不到
+        service = make_service(tmp_path)
+        note = service.note("央行宣布降准 0.5 个百分点，释放长期资金约 1 万亿元")
+        assert note.domain is IntelDomain.COMPANY
+        assert not note.domain_declared
+
+        stored = service.ingest([note]).items[0]
+        assert stored.event_type is EventType.MONETARY
+        assert stored.domain is IntelDomain.MACRO
+
+    def test_declared_domain_is_respected(self, tmp_path: Path) -> None:
+        service = make_service(tmp_path)
+        note = service.note("央行宣布降准", domain="policy")
+        assert note.domain_declared
+        assert service.ingest([note]).items[0].domain is IntelDomain.POLICY

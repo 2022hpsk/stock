@@ -33,6 +33,7 @@ from quantstock.execution.executor import (
 from quantstock.execution.types import DriftCheck, ExecutionReport, OrderBook, SkipReason
 from quantstock.infra.errors import ConfigError
 from quantstock.infra.logging import get_logger
+from quantstock.infra.money import quantize_order_price
 from quantstock.infra.types import Money, Side, Symbol
 from quantstock.risk.halt import HaltSwitch, HardLimitGuard
 
@@ -186,7 +187,12 @@ class ExecutionService:
             视图条目。
         """
         drift = self._executor.check_drift(intent, current_prices)
-        limit = intent.price_high if intent.side is Side.BUY else intent.price_low
+        is_buy = intent.side is Side.BUY
+        # 与 Executor._to_order 用同一套取整——预览价必须等于实际会挂出的价，
+        # 否则用户确认的和系统提交的是两个数字
+        limit = quantize_order_price(
+            intent.price_high if is_buy else intent.price_low, aggressive=is_buy
+        )
         return IntentPreview(
             intent_id=str(intent.intent_id),
             symbol=intent.symbol,

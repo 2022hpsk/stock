@@ -42,6 +42,7 @@ __all__ = [
     "IntelItem",
     "IntelService",
     "IntelStatus",
+    "PipelineResult",
     "parse_payload",
 ]
 
@@ -170,6 +171,36 @@ class IntelService:
             标准化条目。
         """
         return build_item({"title": text, **fields}, source="external:cli")
+
+    def ingest(
+        self, items: Sequence[IntelItem], *, as_of: dt.datetime | None = None
+    ) -> PipelineResult:
+        """把一批条目走完整流水线后落库。
+
+        **所有入库路径都必须经过这里**——收件箱、CLI 录入、批量导入、HTTP 推送。
+        直接往 store 写等于跳过分类、打分与黑名单评估：条目进了库，
+        但 ``event_type=None``、``importance=0``，一条"立案调查"公告
+        既不会触发禁买、也不会出现在日报的重大消息区。
+        这个漏洞在单元测试里看不出来（它们都走 ``fetch``），
+        只有端到端跑一遍才会暴露。
+
+        Args:
+            items: 待入库条目。
+            as_of: 评估时点。
+
+        Returns:
+            处理结果。
+        """
+        result = self._pipeline.process(
+            items,
+            as_of=as_of or now(),
+            holdings=self._holdings,
+            watchlist=self._watchlist,
+            make_digest=False,
+        )
+        self._store.write(result.items)
+        self._blacklist.save(self._store.blacklist_path, as_of=as_of or now())
+        return result
 
     def fetch(
         self,

@@ -6,19 +6,28 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import (
+    ROUND_CEILING,
+    ROUND_DOWN,
+    ROUND_FLOOR,
+    ROUND_HALF_UP,
+    Decimal,
+    InvalidOperation,
+)
 from typing import Final
 
 from quantstock.infra.types import Money
 
 __all__ = [
     "CNY",
+    "ORDER_TICK",
     "PRICE",
     "RATIO",
     "ZERO",
     "align_lot",
     "money",
     "quantize_cny",
+    "quantize_order_price",
     "quantize_price",
     "quantize_ratio",
     "to_money",
@@ -29,6 +38,15 @@ CNY: Final[Decimal] = Decimal("0.01")
 
 PRICE: Final[Decimal] = Decimal("0.0001")
 """价格精度。A股报价最小变动为 0.01 元，多留两位供均价与复权计算。"""
+
+ORDER_TICK: Final[Decimal] = Decimal("0.01")
+"""A 股委托价格的最小变动单位。
+
+与 ``PRICE`` 的区别是关键的：``PRICE`` 是内部计算精度，``ORDER_TICK`` 是
+**交易所接受的报价精度**。一个 1577.478 的限价在券商 App 里根本输不进去——
+把它印在手工执行清单上，用户只能自己瞎凑一个数，而手工通道恰恰是
+miniQMT 停开后的主力通道。
+"""
 
 RATIO: Final[Decimal] = Decimal("0.000001")
 """比例/权重精度。"""
@@ -102,6 +120,28 @@ def quantize_price(value: Money) -> Money:
         量化后的价格。
     """
     return value.quantize(PRICE, rounding=ROUND_HALF_UP)
+
+
+def quantize_order_price(value: Money, *, aggressive: bool) -> Money:
+    """把价格对齐到交易所可接受的报价单位。
+
+    取整方向按**保住成交概率**来定，而不是四舍五入：
+
+    - 买入限价向上取整——舍到更低的价位会降低成交概率；
+    - 卖出限价向下取整——同理。
+
+    代价最多是 1 分钱的价差。相比"挂了一天没成交"，这是划算的交换，
+    与"限价取区间不利一侧"是同一个取舍。
+
+    Args:
+        value: 原始价格。
+        aggressive: 是否向有利于成交的方向取整（买入 True、卖出 False）。
+
+    Returns:
+        对齐到 0.01 的价格。
+    """
+    rounding = ROUND_CEILING if aggressive else ROUND_FLOOR
+    return value.quantize(ORDER_TICK, rounding=rounding)
 
 
 def quantize_ratio(value: Money) -> Money:

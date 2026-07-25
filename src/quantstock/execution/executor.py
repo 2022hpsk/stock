@@ -33,7 +33,7 @@ from quantstock.execution.types import (
 from quantstock.infra.clock import now, today
 from quantstock.infra.errors import ExecutionError
 from quantstock.infra.logging import get_logger
-from quantstock.infra.money import safe_div
+from quantstock.infra.money import quantize_order_price, safe_div
 from quantstock.infra.types import Money, Side, Symbol
 from quantstock.risk.halt import HaltSwitch, HardLimitGuard
 
@@ -313,7 +313,12 @@ class Executor:
         Returns:
             券商订单（DRAFT 状态）。
         """
-        price = intent.price_high if intent.side is Side.BUY else intent.price_low
+        is_buy = intent.side is Side.BUY
+        # 再对齐到 0.01 报价单位：1577.478 这样的价格在券商 App 里输不进去，
+        # 而手工通道就是照着这个价去下单的
+        price = quantize_order_price(
+            intent.price_high if is_buy else intent.price_low, aggressive=is_buy
+        )
         qty = decision.adjusted_qty if decision.adjusted_qty is not None else intent.qty
         return BrokerOrder(
             order_id=uuid.uuid4().hex[:12],

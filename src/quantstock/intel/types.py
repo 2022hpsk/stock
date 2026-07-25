@@ -164,6 +164,13 @@ class IntelItem:
     industries: tuple[str, ...] = ()
     themes: tuple[str, ...] = ()
     event_type: EventType | None = None
+    domain_declared: bool = False
+    """``domain`` 是源方明确声明的，还是入库时兜底填的。
+
+    必须区分：外置导入的条目在用户没写 domain 时会兜底为 ``COMPANY``，
+    若流水线把这个兜底值当成"源方声明"，事件分类推断出的域就永远被压住——
+    一条讲降准的随手记会被归到个股域，在日报的宏观段里根本看不到。
+    """
     classifier: str = "rule"
     """分类器来源：``rule`` 或 ``llm:<model>``。LLM 结果必须可识别（红线 I-R3）。"""
     importance: int = 0

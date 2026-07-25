@@ -15,6 +15,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from quantstock.config import load_settings
@@ -22,6 +23,7 @@ from quantstock.config.models import RootConfig
 from quantstock.infra.clock import today
 from quantstock.infra.errors import QuantStockError
 from quantstock.infra.logging import setup_logging
+from quantstock.infra.money import quantize_cny
 from quantstock.infra.types import Side, Symbol
 from quantstock.services.execution_service import (
     ConfirmationDecision,
@@ -30,7 +32,12 @@ from quantstock.services.execution_service import (
     IntentPreview,
     SkipReason,
 )
-from quantstock.services.intel_service import IntelDomain, IntelService, parse_payload
+from quantstock.services.intel_service import (
+    IntelDomain,
+    IntelService,
+    PipelineResult,
+    parse_payload,
+)
 from quantstock.services.llm_service import LLMService
 from quantstock.services.system_service import SystemService
 
@@ -253,7 +260,8 @@ def plan_show(
         action = "买入" if intent.side is Side.BUY else "卖出"
         console.print(
             f"\n[bold]{action} {intent.symbol}[/bold]  {intent.qty} 股  "
-            f"{intent.price_low}~{intent.price_high}  ({intent.urgency.value})"
+            f"{quantize_cny(intent.price_low)}~{quantize_cny(intent.price_high)}"
+            f"  ({intent.urgency.value})"
         )
         console.print(f"  {intent.rationale.verdict}")
         for line in intent.rationale.technical.statements():
@@ -298,7 +306,8 @@ def execute(
 
     console.print(
         f"计划 {preview.plan_id}   通道 [cyan]{preview.broker}[/cyan]   "
-        f"买入 {preview.total_buy}   卖出 {preview.total_sell}"
+        f"买入 {quantize_cny(preview.total_buy):,} 元   "
+        f"卖出 {quantize_cny(preview.total_sell):,} 元"
     )
     if preview.requires_live_flag and not live:
         console.print("[yellow]该通道涉及真实资金，需加 --live 才会真正提交[/yellow]")
@@ -333,7 +342,7 @@ def _confirm_one(item: IntentPreview) -> ConfirmationDecision:
     action = "买入" if item.side is Side.BUY else "卖出"
     console.print(
         f"\n[bold]{action} {item.symbol}[/bold]  {item.qty} 股  "
-        f"限价 {item.limit_price}  约 {item.estimated_amount} 元"
+        f"限价 {quantize_cny(item.limit_price)}  约 {quantize_cny(item.estimated_amount):,} 元"
     )
     console.print(f"  {item.verdict}")
     if item.drift is not None:
@@ -408,12 +417,7 @@ def intel_fetch(
 
     result = service.fetch(domains=domains, lookback_days=lookback)
     console.print(f"[green]✓[/green] {result.summary}")
-
-    if result.blacklisted:
-        console.print("\n[red]● 新增情报黑名单（禁止买入）[/red]")
-        for entry in service.blacklist_entries():
-            if entry.symbol in result.blacklisted:
-                console.print(f"  {entry.explain()}")
+    _print_new_blacklist(service, result)
 
     if result.digest is not None and (missing := result.digest.missing_domains):
         # 情报缺失只是降级，不阻断建议——但必须说出来
@@ -433,7 +437,8 @@ def intel_digest(
 
     digest = service.digest(trade_date=trade_date, session=session)
     for line in service.render_digest(digest):
-        console.print(line)
+        # 情报标题里的 [域] 会被 rich 当成样式标签吞掉，必须转义
+        console.print(escape(line))
 
 
 @intel_app.command("note")
@@ -460,8 +465,12 @@ def intel_note(
         sentiment=sentiment,
         url=url,
     )
-    service.store.write([item])
-    console.print(f"[green]✓ 已录入[/green]  {item.cite()}")
+    # 走完整流水线而不是直接写库：否则分类、打分与黑名单评估全被跳过
+    result = service.ingest([item])
+    stored = result.items[0] if result.items else item
+    console.print(f"[green]✓ 已录入[/green]  {escape(stored.cite())}")
+    console.print(f"  事件类型 {stored.event_type or '未分类'}  重要性 {stored.importance}")
+    _print_new_blacklist(service, result)
     if not url:
         # 没有链接的条目进不了建议解释（红线 I-R4），提前说清楚
         console.print("[yellow]⚠ 未提供原文链接，该条不会进入建议解释的情报支柱[/yellow]")
@@ -479,12 +488,21 @@ def intel_inbox(
     report = service.scan_inbox(move=not preview)
     console.print(f"收件箱：{service.inbox_dir}")
     console.print(f"[green]✓[/green] {report.summary}")
-    for item in report.items:
-        console.print(f"  · {item.cite()}")
+
+    if preview:
+        for item in report.items:
+            console.print(f"  · {escape(item.cite())}")
+    elif report.items:
+        result = service.ingest(report.items)
+        for item in result.items:
+            console.print(
+                f"  · {escape(item.cite())}\n"
+                f"      事件类型 {item.event_type or '未分类'}  重要性 {item.importance}"
+            )
+        _print_new_blacklist(service, result)
+
     for path, reason in report.failed:
-        console.print(f"  [red]✗ {path.name}：{reason}[/red]")
-    if not preview and report.items:
-        service.store.write(report.items)
+        console.print(f"  [red]✗ {escape(path.name)}：{escape(reason)}[/red]")
 
 
 @intel_app.command("import")
@@ -503,8 +521,24 @@ def intel_import(
 
     rows = parse_payload(path, path.read_text(encoding="utf-8"))
     items = service.import_rows(rows, source_name=source_name)
-    service.store.write(items)
-    console.print(f"[green]✓ 已导入 {len(items)} 条[/green]（原文件 {len(rows)} 行）")
+    result = service.ingest(items)
+    console.print(f"[green]✓ 已导入 {len(result.items)} 条[/green]（原文件 {len(rows)} 行）")
+    _print_new_blacklist(service, result)
+
+
+def _print_new_blacklist(service: IntelService, result: PipelineResult) -> None:
+    """打印本次新增的情报黑名单。
+
+    Args:
+        service: 情报服务。
+        result: 流水线结果。
+    """
+    if not result.blacklisted:
+        return
+    console.print("\n[red]● 新增情报黑名单（禁止买入）[/red]")
+    for entry in service.blacklist_entries():
+        if entry.symbol in result.blacklisted:
+            console.print(f"  {escape(entry.explain())}")
 
 
 @intel_app.command("blacklist")
@@ -518,7 +552,7 @@ def intel_blacklist(config_dir: ConfigDirOption = Path("config")) -> None:
 
     console.print(f"[red]● 情报黑名单 {len(entries)} 只（禁止买入）[/red]")
     for entry in entries:
-        console.print(f"  {entry.explain()}")
+        console.print(f"  {escape(entry.explain())}")
 
 
 # ---------------------------------------------------------------- 大模型

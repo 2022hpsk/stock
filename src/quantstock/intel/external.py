@@ -190,6 +190,7 @@ def build_item(
         source_tier=_coerce_tier(tier),
         domain=_coerce_enum(IntelDomain, payload.get("domain"), IntelDomain.COMPANY)
         or IntelDomain.COMPANY,
+        domain_declared=bool(str(payload.get("domain") or "").strip()),
         publish_at=_coerce_datetime(payload.get("publish_at"), moment),
         fetched_at=moment,
         title=title,

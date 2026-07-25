@@ -224,7 +224,10 @@ class IntelPipeline:
         if item.event_type is not None:
             return item
 
-        result = self._classifier.classify(item.title, item.body, default_domain=item.domain)
+        # 只有源方**明确声明**的域才压过推断结果。兜底填的 COMPANY 不算声明——
+        # 否则讲降准的条目会永远留在个股域
+        declared = item.domain if item.domain_declared else None
+        result = self._classifier.classify(item.title, item.body, default_domain=declared)
         if result.event_type is not None:
             return replace(
                 item, event_type=result.event_type, domain=result.domain, classifier="rule"
