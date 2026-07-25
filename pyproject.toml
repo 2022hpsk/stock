@@ -178,21 +178,37 @@ exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedE
 # 强制开发规范"分层依赖单向向下"
 [tool.importlinter]
 root_package = "quantstock"
+# 需要它才能校验对 anthropic / xtquant 等外部包的禁止依赖（LR1、券商 SDK 隔离）
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "分层架构：依赖只能向下"
 type = "layers"
+# 自上而下，上层可依赖下层，反向即违规。
+# 两处需要说明：
+# ① `risk.costs`（费用与红利税模型）被拆到很低的一层。它是纯粹的领域计算，
+#    不含任何风控规则语义，而 `account.ledger` 与 `backtest.engine` 都必须用它
+#    算税费——回测与实盘共用同一套费用模型才有可比性。把它和 `risk.engine`
+#    放同一层会造成 risk → portfolio → account → risk 的环。
+# ② `cli` 在 `web` 之上：`quantstock ui` 命令要启动 web 应用，反向永远不成立。
 layers = [
-    "quantstock.web | quantstock.cli",
+    "quantstock.cli",
+    "quantstock.web",
     "quantstock.services",
-    "quantstock.advisor",
-    "quantstock.execution | quantstock.reporting | quantstock.portfolio | quantstock.risk | quantstock.strategy | quantstock.account",
-    "quantstock.backtest | quantstock.factors",
+    "quantstock.execution",
+    "quantstock.advisor | quantstock.reporting",
+    "quantstock.strategy",
+    "quantstock.risk.engine | quantstock.risk.halt",
+    "quantstock.portfolio",
+    "quantstock.backtest",
+    "quantstock.account",
+    "quantstock.factors",
     "quantstock.intel",
     "quantstock.data",
+    "quantstock.risk.costs",
     "quantstock.llm",
-    "quantstock.infra",
     "quantstock.config",
+    "quantstock.infra",
 ]
 
 # LR1：风控与执行链路不得受大模型影响
@@ -222,6 +238,9 @@ forbidden_modules = ["xtquant"]
 [[tool.importlinter.contracts]]
 name = "web 与 cli 只能依赖 services 与 config"
 type = "forbidden"
+# 只禁**直接** import。经 services 转出的契约类型是允许的——
+# 要拦的是"客户端绕过 services 直接调业务层"，不是 services 自己的合法依赖。
+allow_indirect_imports = true
 source_modules = ["quantstock.web", "quantstock.cli"]
 forbidden_modules = [
     "quantstock.advisor", "quantstock.execution", "quantstock.reporting",

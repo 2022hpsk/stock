@@ -6,6 +6,7 @@ CLI 是与 Web UI 平级的**薄**客户端：只做参数解析、调用 ``serv
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -18,8 +19,17 @@ from rich.table import Table
 
 from quantstock.config import load_settings
 from quantstock.config.models import RootConfig
+from quantstock.infra.clock import today
 from quantstock.infra.errors import QuantStockError
 from quantstock.infra.logging import setup_logging
+from quantstock.infra.types import Side, Symbol
+from quantstock.services.execution_service import (
+    ConfirmationDecision,
+    ExecutionReport,
+    ExecutionService,
+    IntentPreview,
+    SkipReason,
+)
 from quantstock.services.system_service import SystemService
 
 app = typer.Typer(
@@ -214,6 +224,168 @@ def status(config_dir: ConfigDirOption = Path("config")) -> None:
     for component in snapshot.components:
         table.add_row(component.name, "✓" if component.ok else "✗", component.detail)
     console.print(table)
+
+
+# ---------------------------------------------------------------- 执行
+plan_app = typer.Typer(help="交易计划：查看与执行。")
+app.add_typer(plan_app, name="plan")
+
+
+@plan_app.command("show")
+def plan_show(
+    config_dir: ConfigDirOption = Path("config"),
+    date: Annotated[str, typer.Option("--date", "-d", help="交易日 YYYY-MM-DD，默认今日")] = "",
+) -> None:
+    """展示某交易日的计划（含四支柱解释）。"""
+    settings = load_settings(config_dir)
+    service = ExecutionService(settings)
+    trade_date = dt.date.fromisoformat(date) if date else today()
+    plan = service.store.latest(trade_date)
+    if plan is None:
+        console.print(f"[yellow]{trade_date} 没有已保存的计划[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"计划 {plan.plan_id}   {plan.trade_date}   {len(plan.intents)} 条建议")
+    console.print(f"数据指纹 {plan.data_fingerprint or '—'}   参数哈希 {plan.param_hash or '—'}")
+    for intent in plan.intents:
+        action = "买入" if intent.side is Side.BUY else "卖出"
+        console.print(
+            f"\n[bold]{action} {intent.symbol}[/bold]  {intent.qty} 股  "
+            f"{intent.price_low}~{intent.price_high}  ({intent.urgency.value})"
+        )
+        console.print(f"  {intent.rationale.verdict}")
+        for line in intent.rationale.technical.statements():
+            console.print(f"    · {line}")
+        for note in intent.rationale.falsification:
+            console.print(f"    [dim]证伪：{note}[/dim]")
+    if plan.rejected:
+        console.print(
+            f"\n[dim]被否决 {len(plan.rejected)} 只：为什么没买与为什么买了同样重要[/dim]"
+        )
+        for rejected in plan.rejected:
+            console.print(f"  [dim]{rejected.symbol}  {rejected.reason}[/dim]")
+
+
+@app.command()
+def execute(
+    config_dir: ConfigDirOption = Path("config"),
+    date: Annotated[str, typer.Option("--date", "-d", help="交易日 YYYY-MM-DD，默认今日")] = "",
+    only: Annotated[str, typer.Option("--only", help="只执行指定标的，逗号分隔")] = "",
+    live: Annotated[bool, typer.Option("--live", help="使用真实资金通道（红线 R5）")] = False,
+) -> None:
+    """逐单确认并执行当日计划。
+
+    每一条都要你亲手过一遍；跳过时必须选原因——复盘要按原因统计人工干预的价值。
+    """
+    settings = load_settings(config_dir)
+    service = ExecutionService(settings)
+    trade_date = dt.date.fromisoformat(date) if date else today()
+
+    plan = service.store.latest(trade_date)
+    if plan is None:
+        console.print(f"[yellow]{trade_date} 没有已保存的计划，请先生成[/yellow]")
+        raise typer.Exit(1)
+
+    only_symbols = (
+        frozenset(Symbol(s.strip()) for s in only.split(",") if s.strip()) if only else None
+    )
+    preview = service.preview(plan, current_prices={})
+    if preview.halted:
+        console.print(f"[red]● 系统处于急停状态：{preview.halt_reason}[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"计划 {preview.plan_id}   通道 [cyan]{preview.broker}[/cyan]   "
+        f"买入 {preview.total_buy}   卖出 {preview.total_sell}"
+    )
+    if preview.requires_live_flag and not live:
+        console.print("[yellow]该通道涉及真实资金，需加 --live 才会真正提交[/yellow]")
+
+    confirmed_by = typer.prompt("确认人（记入审计，红线 R5）")
+    decisions = [
+        _confirm_one(item)
+        for item in preview.items
+        if only_symbols is None or item.symbol in only_symbols
+    ]
+
+    report = service.execute(
+        plan,
+        decisions=decisions,
+        current_prices={},
+        confirmed_by=confirmed_by,
+        only_symbols=only_symbols,
+        live=live,
+    )
+    _print_report(report)
+
+
+def _confirm_one(item: IntentPreview) -> ConfirmationDecision:
+    """对单条建议做逐单确认。
+
+    Args:
+        item: 执行前视图条目。
+
+    Returns:
+        人工决定。
+    """
+    action = "买入" if item.side is Side.BUY else "卖出"
+    console.print(
+        f"\n[bold]{action} {item.symbol}[/bold]  {item.qty} 股  "
+        f"限价 {item.limit_price}  约 {item.estimated_amount} 元"
+    )
+    console.print(f"  {item.verdict}")
+    if item.drift is not None:
+        style = "red" if item.needs_review else "dim"
+        console.print(f"  [{style}]{item.drift.message}[/{style}]")
+
+    if typer.confirm("  执行这一条？", default=not item.needs_review):
+        return ConfirmationDecision(intent_id=item.intent_id, accepted=True)
+
+    reasons = [r.value for r in SkipReason]
+    console.print(f"  跳过原因：{'  '.join(f'[{i}] {r}' for i, r in enumerate(reasons, 1))}")
+    choice = typer.prompt("  选择编号", type=int, default=len(reasons))
+    index = min(max(choice, 1), len(reasons)) - 1
+    return ConfirmationDecision(
+        intent_id=item.intent_id,
+        accepted=False,
+        skip_reason=SkipReason(reasons[index]),
+        skip_note=typer.prompt("  备注（可留空）", default="", show_default=False),
+    )
+
+
+def _print_report(report: ExecutionReport) -> None:
+    """打印执行报告。
+
+    Args:
+        report: 执行报告。
+    """
+    if report.aborted:
+        console.print(f"\n[red]● 已中止，未提交任何订单[/red]\n  {report.abort_reason}")
+        return
+
+    console.print(
+        f"\n[green]✓ 完成[/green]  提交 {len(report.submitted)} 笔  跳过 {len(report.skipped)} 笔"
+    )
+    if report.manual_checklist:
+        console.print("\n[bold]手工执行清单（照抄到券商 App）[/bold]")
+        for line in report.manual_checklist:
+            console.print(f"  {line}")
+    if counts := report.skip_reasons():
+        console.print("\n[dim]跳过原因统计：" + "  ".join(f"{k}×{v}" for k, v in counts.items()))
+
+
+@app.command("cancel-all")
+def cancel_all(
+    config_dir: ConfigDirOption = Path("config"),
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过二次确认")] = False,
+) -> None:
+    """撤销所有未成交委托。急停后应立即执行。"""
+    settings = load_settings(config_dir)
+    if not yes and not typer.confirm("确认撤销全部未成交委托？"):
+        console.print("已取消")
+        return
+    count = ExecutionService(settings).cancel_all()
+    console.print(f"[green]✓ 已发出撤单指令[/green]  影响 {count} 笔")
 
 
 if __name__ == "__main__":  # pragma: no cover
