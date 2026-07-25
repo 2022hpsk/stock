@@ -22,6 +22,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from quantstock.costs import CostModel
 from quantstock.execution.types import (
     BrokerOrder,
     OrderStatus,
@@ -32,7 +33,6 @@ from quantstock.infra.errors import BrokerConnectionError, OrderRejectedError
 from quantstock.infra.logging import get_logger
 from quantstock.infra.money import ZERO, quantize_cny
 from quantstock.infra.types import Money, Side
-from quantstock.risk.costs import CostModel
 
 __all__ = [
     "Broker",

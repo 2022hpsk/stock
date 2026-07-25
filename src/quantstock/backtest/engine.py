@@ -22,13 +22,13 @@ from enum import StrEnum
 from quantstock.account.ledger import Ledger
 from quantstock.account.types import Transaction, TxnSource, TxnType
 from quantstock.backtest.metrics import PerformanceStats, compute_performance
+from quantstock.costs import CostModel
 from quantstock.data.types import Bar
 from quantstock.infra.clock import CST
 from quantstock.infra.errors import StrategyError
 from quantstock.infra.logging import get_logger
 from quantstock.infra.money import align_lot, quantize_cny
 from quantstock.infra.types import AccountId, AssetType, Money, Side, Symbol, TradeDate
-from quantstock.risk.costs import CostModel
 
 __all__ = [
     "BacktestConfig",

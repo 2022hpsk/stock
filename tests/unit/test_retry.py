@@ -54,7 +54,7 @@ class TestRetryPolicy:
 
     def test_delay_for__jitter_stays_in_band(self) -> None:
         policy = RetryPolicy(base_delay=10.0, jitter=0.2)
-        rng = random.Random(42)  # noqa: S311 - 测试用确定性随机源
+        rng = random.Random(42)
         for _ in range(50):
             delay = policy.delay_for(1, rng=rng)
             assert 8.0 <= delay <= 12.0

@@ -18,6 +18,7 @@ from pathlib import Path
 from quantstock.advisor.store import PlanStore
 from quantstock.advisor.types import TradeIntent, TradePlan
 from quantstock.config.settings import Settings
+from quantstock.costs import CostModel
 from quantstock.execution.brokers import (
     Broker,
     FileBridgeBroker,
@@ -33,7 +34,6 @@ from quantstock.execution.types import DriftCheck, ExecutionReport, OrderBook, S
 from quantstock.infra.errors import ConfigError
 from quantstock.infra.logging import get_logger
 from quantstock.infra.types import Money, Side, Symbol
-from quantstock.risk.costs import CostModel
 from quantstock.risk.halt import HaltSwitch, HardLimitGuard
 
 # CLI 与界面是"薄"客户端，只允许依赖 services（F20.1 分层契约）。

@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from quantstock.account.ledger import Ledger
 from quantstock.advisor.types import PositionAnalytics
+from quantstock.costs import dividend_tax_rate
 from quantstock.factors.technical import (
     atr,
     moving_average,
@@ -22,7 +23,6 @@ from quantstock.factors.technical import (
 )
 from quantstock.infra.money import quantize_price, safe_div
 from quantstock.infra.types import Money, Symbol, TradeDate
-from quantstock.risk.costs import dividend_tax_rate
 
 __all__ = ["ATR_STOP_MULTIPLE", "build_analytics"]
 

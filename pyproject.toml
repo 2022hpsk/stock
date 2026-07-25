@@ -111,7 +111,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "D", "ANN", "PLR2004", "ARG", "SLF001"]
+# S311：测试里用带固定种子的 random 生成合成收益，可复现正是目的所在
+"tests/**" = ["S101", "S105", "S106", "S311", "D", "ANN", "PLR2004", "ARG", "SLF001"]
 "src/quantstock/cli/**" = ["T20"]   # CLI 通过 rich console 输出
 
 [tool.ruff.lint.mccabe]
@@ -186,10 +187,11 @@ name = "分层架构：依赖只能向下"
 type = "layers"
 # 自上而下，上层可依赖下层，反向即违规。
 # 两处需要说明：
-# ① `risk.costs`（费用与红利税模型）被拆到很低的一层。它是纯粹的领域计算，
-#    不含任何风控规则语义，而 `account.ledger` 与 `backtest.engine` 都必须用它
-#    算税费——回测与实盘共用同一套费用模型才有可比性。把它和 `risk.engine`
-#    放同一层会造成 risk → portfolio → account → risk 的环。
+# ① `quantstock.costs`（费用与红利税模型）是独立的顶层模块而不是 `risk` 的子模块。
+#    它是纯粹的领域计算，不含任何风控规则语义，而 `account.ledger` 与
+#    `backtest.engine` 都必须用它算税费——回测与实盘共用同一套费用模型才有可比性。
+#    留在 `risk` 包内会形成 risk → portfolio → account → risk 的包级循环：
+#    `import quantstock.portfolio` 作为首个导入时会直接 ImportError。
 # ② `cli` 在 `web` 之上：`quantstock ui` 命令要启动 web 应用，反向永远不成立。
 layers = [
     "quantstock.cli",
@@ -198,14 +200,14 @@ layers = [
     "quantstock.execution",
     "quantstock.advisor | quantstock.reporting",
     "quantstock.strategy",
-    "quantstock.risk.engine | quantstock.risk.halt",
+    "quantstock.risk",
     "quantstock.portfolio",
     "quantstock.backtest",
     "quantstock.account",
     "quantstock.factors",
     "quantstock.intel",
     "quantstock.data",
-    "quantstock.risk.costs",
+    "quantstock.costs",
     "quantstock.llm",
     "quantstock.config",
     "quantstock.infra",

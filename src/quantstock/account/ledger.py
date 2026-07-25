@@ -23,10 +23,10 @@ from quantstock.account.types import (
     Transaction,
     TxnType,
 )
+from quantstock.costs import dividend_tax_rate
 from quantstock.infra.errors import LedgerError
 from quantstock.infra.money import ZERO, quantize_cny, quantize_price, safe_div
 from quantstock.infra.types import AccountId, Money, Symbol, TradeDate
-from quantstock.risk.costs import dividend_tax_rate
 
 __all__ = ["Ledger", "replay"]
 
