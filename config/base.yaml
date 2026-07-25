@@ -1,76 +1,118 @@
 # 通用配置。本地覆盖请写 config/local.yaml（已 gitignore）。
+#
+# 本文件的结构由 src/quantstock/config/models.py 的 RootConfig 定义并强校验
+# （extra="forbid"：拼错的配置项会直接报错，而不是被静默忽略）。
+# 界面上的配置页由该模型导出的 JSON Schema 自动生成，字段说明即为界面上的提示文字。
 
 app:
   timezone: Asia/Shanghai
   var_dir: ./var
   log_level: INFO
-  log_format: json          # json / console
-  random_seed: 20260101     # 固定随机种子，保证可复现（开发规范 R6）
+  log_format: json
+  random_seed: 20260101
 
 data:
   start_date: "2015-01-01"
-  # 降级链：按顺序尝试，全部失败则当日不出建议
   source_chain: [tushare, akshare, baostock]
   adjust_for_research: hfq
   adjust_for_trading: none
   minute_freqs: [M1, M5, M30]
-  minute_universe: [holdings, watchlist, candidates]   # 分钟线只覆盖这些池
   minute_retention_days: 730
   rate_limit_per_min: 60
   cache_ttl_sec: 3600
+  init_tier: core
 
 quality:
-  fail_on: [DQ01, DQ02, DQ03, DQ04]      # 致命级：拒绝入库
-  warn_on: [DQ05, DQ06, DQ07, DQ08, DQ09, DQ10]
+  fail_on: [DQ01, DQ02, DQ03, DQ04, DQ11]
   coverage_threshold: 0.99
   cross_check_sample_pct: 0.01
   cross_check_max_deviation: 0.005
-  # 关键字段缺失超此比例则当日不出建议
   abort_advise_missing_ratio: 0.02
 
 factors:
-  winsorize: { method: mad, n: 3 }
+  winsorize_mad_n: 3.0
   fillna: industry_median
   standardize: zscore
   neutralize: [industry, market_cap]
-  eval:
-    ic_window_days: 756          # 约 3 年
-    layers: 5
+  ic_window_days: 756
+  max_correlation: 0.7
+  label:
+    type: forward_excess_return
+    horizon_days: 20
+    benchmark: hs300
+    exclude_unbuyable_at_entry: true    # 关掉会让 IC 严重虚高，见 F2.5
+    exclude_unsellable_at_exit: true
+    winsorize_label: 0.01
 
 portfolio:
-  weighting: score_weighted      # equal / score_weighted / risk_parity / inverse_vol / mean_variance
+  weighting: inverse_vol
   top_n: 10
+  core_ratio: 0.60
+  satellite_ratio: 0.40
+  rebalance_band: 0.02
 
 risk:
+  # ⚠️ 绝对金额硬闸：请按你自己的实际资金规模手工设定，程序不会自动推导。
+  # 比例风控无法防御计算基数出错——总资产算成 10 倍时比例约束全都会通过。
+  hard_limits:
+    enabled: true
+    max_single_order_amount: 100000
+    max_daily_total_amount: 300000
+    max_daily_order_count: 20
+    max_single_order_qty: 100000
+    min_account_value_sanity: 1000
+    max_account_value_sanity: 100000000
+    max_account_value_daily_change: 0.30
   circuit_breaker:
-    watch:  { daily_loss: 0.03, drawdown_20d: 0.12 }
-    halted: { daily_loss: 0.05, drawdown_20d: 0.18 }
+    watch_daily_loss: 0.03
+    watch_drawdown_20d: 0.12
+    halted_daily_loss: 0.05
+    halted_drawdown_20d: 0.18
     recover_days: 3
     recover_drawdown: 0.08
-  correlation_alert: { window: 60, threshold: 0.85, combined_weight: 0.25 }
+  correlation_window: 60
+  correlation_threshold: 0.85
+
+llm:
+  enabled: false          # 需先填 ANTHROPIC_API_KEY 并通过 A/B 回测验证有净增量再开
+  mode: "off"             # 必须加引号：YAML 1.1 会把裸 off 解析成布尔 false
+  max_influence: 0.15     # α，硬上限 0.20
+  temperature: 0.0
+  anonymize_in_backtest: true
+  strip_absolute_dates: true
+  daily_budget_usd: 2.0
+  monthly_budget_usd: 30.0
+  rate_limit_per_min: 20
+  model_fast: claude-haiku-4-5-20251001
+  model_main: claude-sonnet-5
+  model_deep: claude-opus-5
+  tasks:
+    intel_classify: { enabled: true, model: fast, prompt_version: v1 }
+    position_judge: { enabled: true, model: main, prompt_version: v1 }
+    market_judge:   { enabled: true, model: main, prompt_version: v1 }
+    explain:        { enabled: true, model: main, prompt_version: v1 }
 
 advisor:
-  plan_valid_days: 1             # 计划仅当日有效
-  price_drift_threshold: 0.03    # T+1 开盘价漂移超此值该单标记 STALE
-  require_full_rationale: true   # 缺支柱的建议不进入 TradePlan（F7.3）
-  price_band_pct: 0.006          # 建议限价区间宽度（相对参考价 ±0.6%）
+  plan_valid_days: 1
+  price_drift_threshold: 0.03
+  require_full_rationale: true
+  price_band_pct: 0.006
 
 execution:
-  broker: paper                  # paper / manual / xtquant
-  require_manual_confirm: true   # 真实通道下强制为 true，不可关闭（R5）
+  broker: paper           # paper / manual / file_bridge / qmt / ptrade
+  require_manual_confirm: true
   cancel_unfilled_before: "14:50"
-  split_order_threshold_pct: 0.02  # 超过当日成交量此比例则拆单
+  split_order_threshold_pct: 0.02
 
 schedule:
   daily_bars: "15:05"
-  minute_bars: "15:10"
-  valuation: "15:15"
-  moneyflow: "18:00"
-  fundamentals: "20:00"
+  intel_pre_market: "08:30"
+  intel_post_market: "18:30"
   factors: "15:30"
   advise: "16:00"
   notify: "16:25"
 
 notify:
-  channels: [console]            # console / email / wecom / telegram / file
+  channels: [console]
   on_events: [daily_report, risk_alert, circuit_breaker, data_failure, intel_critical]
+  quiet_hours: ["22:00", "07:00"]

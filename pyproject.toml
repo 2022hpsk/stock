@@ -102,13 +102,16 @@ select = [
     "T20",         # 禁止 print（开发规范第七条）
 ]
 ignore = [
-    "D100", "D104",   # 模块/包级 docstring 不强制
-    "D203", "D213",   # 与 D211/D212 冲突
-    "PLR0913",        # 参数个数由 review 把关
+    "D100", "D104",              # 模块/包级 docstring 不强制
+    "D203", "D213",              # 与 D211/D212 冲突
+    "PLR0913",                   # 参数个数由 review 把关
+    "RUF001", "RUF002", "RUF003", # 本项目的注释与文档使用中文，全角标点是刻意的
+    "D415",                      # 中文句号「。」不被识别为终止标点
+    "COM812",                    # 与 ruff format 冲突
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "D", "ANN", "PLR2004", "ARG"]
+"tests/**" = ["S101", "S105", "S106", "D", "ANN", "PLR2004", "ARG", "SLF001"]
 "src/quantstock/cli/**" = ["T20"]   # CLI 通过 rich console 输出
 
 [tool.ruff.lint.mccabe]
