@@ -20,6 +20,7 @@ from quantstock.config import load_settings
 from quantstock.config.models import RootConfig
 from quantstock.infra.errors import QuantStockError
 from quantstock.infra.logging import setup_logging
+from quantstock.services.system_service import SystemService
 
 app = typer.Typer(
     name="quantstock",
@@ -115,6 +116,104 @@ def config_schema(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(schema + "\n", encoding="utf-8")
     console.print(f"[green]✓[/green] Schema 已写入 {output}")
+
+
+@app.command()
+def ui(
+    config_dir: ConfigDirOption = Path("config"),
+    host: Annotated[str, typer.Option("--host", help="监听地址")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="监听端口")] = 8686,
+    readonly: Annotated[
+        bool, typer.Option("--readonly", help="只读模式：可看不可操作，适合手机查看")
+    ] = False,
+    open_browser: Annotated[bool, typer.Option("--open", help="自动打开浏览器")] = False,
+) -> None:
+    """启动本地可视化界面。所有操作（含全部配置）都可在界面完成。"""
+    import uvicorn  # noqa: PLC0415 - 延迟导入，未装 web 依赖时其它命令仍可用
+
+    from quantstock.web.app import create_app  # noqa: PLC0415
+
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        # 界面是下单入口，暴露到局域网意味着同网段任何设备都能操作账户
+        err_console.print(
+            f"[yellow]⚠ 警告[/yellow]：监听地址为 {host} 而非本地回环，"
+            "界面将暴露给网络中的其它设备。请确认这是你想要的。"
+        )
+
+    web_app = create_app(config_dir=config_dir, readonly=readonly)
+    token = web_app.state.app_state.access_token
+    url = f"http://{host}:{port}"
+
+    console.print()
+    console.print(f"  界面地址  [cyan]{url}[/cyan]")
+    console.print(f"  访问口令  [bold yellow]{token}[/bold yellow]")
+    console.print(f"  模式      {'只读' if readonly else '可读写'}")
+    console.print()
+
+    if open_browser:
+        import webbrowser  # noqa: PLC0415 - 仅在需要时导入
+
+        webbrowser.open(url)
+
+    uvicorn.run(web_app, host=host, port=port, log_config=None)
+
+
+@app.command()
+def halt(
+    reason: Annotated[str, typer.Option("--reason", "-r", help="急停原因，必填")],
+    config_dir: ConfigDirOption = Path("config"),
+) -> None:
+    """一键急停：此后所有下单路径一律拒绝，直到显式 resume。"""
+    settings = load_settings(config_dir)
+    state = SystemService(settings).halt(reason=reason, by="cli")
+    console.print(f"[red]● 已急停[/red]  原因：{state.reason}")
+    console.print(f"  标志文件：{settings.var_dir / 'HALT'}")
+    console.print("  解除请执行：[cyan]quantstock resume[/cyan]")
+
+
+@app.command()
+def resume(
+    config_dir: ConfigDirOption = Path("config"),
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过二次确认")] = False,
+) -> None:
+    """解除急停。"""
+    settings = load_settings(config_dir)
+    service = SystemService(settings)
+    current = service.halt_switch.state()
+    if not current.halted:
+        console.print("[green]系统当前未处于急停状态[/green]")
+        return
+    console.print(f"当前急停原因：{current.reason}（{current.halted_at}）")
+    if not yes and not typer.confirm("确认解除急停？"):
+        console.print("已取消")
+        return
+    service.resume(by="cli")
+    console.print("[green]✓ 已解除急停[/green]")
+
+
+@app.command()
+def status(config_dir: ConfigDirOption = Path("config")) -> None:
+    """显示系统状态。"""
+    settings = load_settings(config_dir)
+    snapshot = SystemService(settings).status()
+
+    console.print(f"quantstock {snapshot.version}   {snapshot.checked_at}")
+    if snapshot.halt.halted:
+        console.print(f"[red]● 已急停[/red]  {snapshot.halt.reason}")
+    else:
+        console.print("[green]● 运行中[/green]")
+    console.print(f"交易通道：{snapshot.broker}")
+    console.print(
+        f"大模型：{'启用 (' + snapshot.llm_mode + ')' if snapshot.llm_enabled else '关闭'}"
+    )
+
+    table = Table(show_header=True)
+    table.add_column("组件", style="cyan")
+    table.add_column("状态")
+    table.add_column("说明")
+    for component in snapshot.components:
+        table.add_row(component.name, "✓" if component.ok else "✗", component.detail)
+    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover
