@@ -73,6 +73,22 @@ risk:
   correlation_window: 60
   correlation_threshold: 0.85
 
+intel:
+  enabled: true
+  lookback_days: 7
+  retention_days: 1095
+  # 不要想当然设成 0.9：SimHash 是 64 位有损指纹，实测同一事件的媒体改写
+  # 落在 0.64~0.77，阈值过高会让近似去重根本不触发（见 intel/dedup.py 的推导表）
+  dedup_similarity: 0.65
+  dedup_window_hours: 6
+  max_score_influence: 0.15      # 硬上限 0.20（红线 I-R1）
+  blacklist_ttl_days: 60
+  blacklist_importance_threshold: 80
+  negative_streak: 3
+  user_importance_cap: 90        # 防止单条人工输入压过全部量化信号
+  sentiment_use_llm: false
+  domains: [macro, policy, industry, company, market, overseas, calendar]
+
 llm:
   enabled: false          # 需先填 ANTHROPIC_API_KEY 并通过 A/B 回测验证有净增量再开
   mode: "off"             # 必须加引号：YAML 1.1 会把裸 off 解析成布尔 false

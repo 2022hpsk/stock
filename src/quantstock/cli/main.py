@@ -30,6 +30,7 @@ from quantstock.services.execution_service import (
     IntentPreview,
     SkipReason,
 )
+from quantstock.services.intel_service import IntelDomain, IntelService, parse_payload
 from quantstock.services.system_service import SystemService
 
 app = typer.Typer(
@@ -386,6 +387,137 @@ def cancel_all(
         return
     count = ExecutionService(settings).cancel_all()
     console.print(f"[green]✓ 已发出撤单指令[/green]  影响 {count} 笔")
+
+
+# ---------------------------------------------------------------- 情报
+intel_app = typer.Typer(help="情报：采集、外置导入、摘要、黑名单。", no_args_is_help=True)
+app.add_typer(intel_app, name="intel")
+
+
+@intel_app.command("fetch")
+def intel_fetch(
+    config_dir: ConfigDirOption = Path("config"),
+    domain: Annotated[str, typer.Option("--domain", help="只采集某个域，ALL 表示全部")] = "ALL",
+    lookback: Annotated[int, typer.Option("--lookback", help="向前追溯天数")] = 7,
+) -> None:
+    """采集全域情报并落库。重复执行幂等。"""
+    settings = load_settings(config_dir)
+    service = IntelService(settings)
+    domains = None if domain.upper() == "ALL" else [IntelDomain(domain.lower())]
+
+    result = service.fetch(domains=domains, lookback_days=lookback)
+    console.print(f"[green]✓[/green] {result.summary}")
+
+    if result.blacklisted:
+        console.print("\n[red]● 新增情报黑名单（禁止买入）[/red]")
+        for entry in service.blacklist_entries():
+            if entry.symbol in result.blacklisted:
+                console.print(f"  {entry.explain()}")
+
+    if result.digest is not None and (missing := result.digest.missing_domains):
+        # 情报缺失只是降级，不阻断建议——但必须说出来
+        console.print(f"\n[yellow]⚠ 今日无情报的域：{'、'.join(d.value for d in missing)}[/yellow]")
+
+
+@intel_app.command("digest")
+def intel_digest(
+    config_dir: ConfigDirOption = Path("config"),
+    date: Annotated[str, typer.Option("--date", "-d", help="交易日 YYYY-MM-DD")] = "",
+    session: Annotated[str, typer.Option("--session", help="pre 盘前 / post 盘后")] = "post",
+) -> None:
+    """输出分域摘要。命中持仓的事件置顶。"""
+    settings = load_settings(config_dir)
+    service = IntelService(settings)
+    trade_date = dt.date.fromisoformat(date) if date else today()
+
+    digest = service.digest(trade_date=trade_date, session=session)
+    for line in service.render_digest(digest):
+        console.print(line)
+
+
+@intel_app.command("note")
+def intel_note(
+    text: Annotated[str, typer.Argument(help="情报内容")],
+    config_dir: ConfigDirOption = Path("config"),
+    symbol: Annotated[list[str] | None, typer.Option("--symbol", help="关联标的，可重复")] = None,
+    domain: Annotated[str, typer.Option("--domain", help="情报域")] = "",
+    event: Annotated[str, typer.Option("--event", help="事件类型")] = "",
+    importance: Annotated[int, typer.Option("--importance", help="重要性 0-100")] = 0,
+    sentiment: Annotated[float, typer.Option("--sentiment", help="情绪 -1~1")] = 0.0,
+    url: Annotated[str, typer.Option("--url", help="原文链接")] = "",
+) -> None:
+    """直接录入一条情报（外置导入方式二）。"""
+    settings = load_settings(config_dir)
+    service = IntelService(settings)
+
+    item = service.note(
+        text,
+        symbols=symbol or [],
+        domain=domain,
+        event_type=event,
+        importance=importance,
+        sentiment=sentiment,
+        url=url,
+    )
+    service.store.write([item])
+    console.print(f"[green]✓ 已录入[/green]  {item.cite()}")
+    if not url:
+        # 没有链接的条目进不了建议解释（红线 I-R4），提前说清楚
+        console.print("[yellow]⚠ 未提供原文链接，该条不会进入建议解释的情报支柱[/yellow]")
+
+
+@intel_app.command("inbox")
+def intel_inbox(
+    config_dir: ConfigDirOption = Path("config"),
+    preview: Annotated[bool, typer.Option("--preview", help="只看不导入，不移动文件")] = False,
+) -> None:
+    """扫描外置导入收件箱（外置导入方式一）。"""
+    settings = load_settings(config_dir)
+    service = IntelService(settings)
+
+    report = service.scan_inbox(move=not preview)
+    console.print(f"收件箱：{service.inbox_dir}")
+    console.print(f"[green]✓[/green] {report.summary}")
+    for item in report.items:
+        console.print(f"  · {item.cite()}")
+    for path, reason in report.failed:
+        console.print(f"  [red]✗ {path.name}：{reason}[/red]")
+    if not preview and report.items:
+        service.store.write(report.items)
+
+
+@intel_app.command("import")
+def intel_import(
+    path: Annotated[Path, typer.Argument(help="CSV / JSON 文件路径")],
+    config_dir: ConfigDirOption = Path("config"),
+    source_name: Annotated[str, typer.Option("--source-name", help="来源名")] = "import",
+) -> None:
+    """批量导入文件（外置导入方式二）。"""
+    settings = load_settings(config_dir)
+    service = IntelService(settings)
+
+    if not path.exists():
+        console.print(f"[red]文件不存在：{path}[/red]")
+        raise typer.Exit(1)
+
+    rows = parse_payload(path, path.read_text(encoding="utf-8"))
+    items = service.import_rows(rows, source_name=source_name)
+    service.store.write(items)
+    console.print(f"[green]✓ 已导入 {len(items)} 条[/green]（原文件 {len(rows)} 行）")
+
+
+@intel_app.command("blacklist")
+def intel_blacklist(config_dir: ConfigDirOption = Path("config")) -> None:
+    """查看当前生效的情报黑名单。"""
+    settings = load_settings(config_dir)
+    entries = IntelService(settings).blacklist_entries()
+    if not entries:
+        console.print("当前无情报黑名单")
+        return
+
+    console.print(f"[red]● 情报黑名单 {len(entries)} 只（禁止买入）[/red]")
+    for entry in entries:
+        console.print(f"  {entry.explain()}")
 
 
 if __name__ == "__main__":  # pragma: no cover

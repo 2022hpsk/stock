@@ -6,12 +6,15 @@ from quantstock.services.execution_service import (
     ExecutionService,
     IntentPreview,
 )
+from quantstock.services.intel_service import IntelService, IntelStatus
 from quantstock.services.system_service import SystemService, SystemStatus
 
 __all__ = [
     "ConfigService",
     "ExecutionPreview",
     "ExecutionService",
+    "IntelService",
+    "IntelStatus",
     "IntentPreview",
     "SaveResult",
     "SystemService",

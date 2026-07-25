@@ -22,6 +22,7 @@ __all__ = [
     "ExecutionConfig",
     "FactorConfig",
     "HardLimitConfig",
+    "IntelConfig",
     "LLMConfig",
     "LLMTaskConfig",
     "LabelConfig",
@@ -437,6 +438,81 @@ class LLMConfig(_Base):
 
 
 # --------------------------------------------------------------------- 建议与执行
+class IntelConfig(_Base):
+    """情报配置。
+
+    情报**不单独产生买入信号**（红线 I-R1），这里的每一项都只在
+    "解释 / 有界软调节 / 单向风险否决"三条通路上生效。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "是否启用情报模块。关闭后系统仍能完整出建议，日报只标注「情报缺失」——"
+            "情报是增强项而非阻断项。"
+        ),
+    )
+    lookback_days: PositiveInt = Field(default=7, description="采集与证据检索的回溯天数。")
+    retention_days: PositiveInt = Field(
+        default=1095, description="情报保留期（自然日），默认 3 年。"
+    )
+    dedup_similarity: Ratio = Field(
+        default=0.65,
+        description=(
+            "近似去重的 SimHash 相似度阈值。不要想当然设成 0.9："
+            "SimHash 是 64 位有损指纹，实测同一事件的媒体改写落在 0.64~0.77，"
+            "阈值过高会让近似去重根本不触发。"
+        ),
+    )
+    dedup_window_hours: PositiveInt = Field(
+        default=6,
+        description="近似去重的时间窗。窗外的相同措辞视为旧闻重发或事件进展，不合并。",
+    )
+    max_score_influence: Ratio = Field(
+        default=0.20,
+        le=0.20,
+        description=("情报因子对最终打分的影响上限（红线 I-R1）。硬上限 0.20，配置不得超过。"),
+    )
+    blacklist_ttl_days: PositiveInt = Field(default=60, description="情报黑名单有效期（自然日）。")
+    blacklist_importance_threshold: int = Field(
+        default=80,
+        ge=0,
+        le=100,
+        description="风险类事件触发黑名单的 importance 门槛。",
+    )
+    negative_streak: PositiveInt = Field(
+        default=3, description="窗口内累计负面事件达到该数即拉黑。"
+    )
+    user_importance_cap: int = Field(
+        default=90,
+        ge=0,
+        le=100,
+        description=(
+            "人工导入条目的 importance 上限。防止单条手工输入压过全部量化信号——"
+            "这是本系统最容易被自己绕过风控的地方。"
+        ),
+    )
+    sentiment_use_llm: bool = Field(
+        default=False,
+        description=(
+            "是否额外用 LLM 打情绪分。规则分始终保留，"
+            "两者分歧 > 0.5 时日报标注「情绪判定存在分歧」（红线 I-R3）。"
+        ),
+    )
+    domains: list[str] = Field(
+        default_factory=lambda: [
+            "macro",
+            "policy",
+            "industry",
+            "company",
+            "market",
+            "overseas",
+            "calendar",
+        ],
+        description="启用的情报域。",
+    )
+
+
 class AdvisorConfig(_Base):
     """建议生成配置。"""
 
@@ -593,6 +669,7 @@ class RootConfig(_Base):
         default_factory=PortfolioConfig, description="组合构建配置。"
     )
     risk: RiskConfig = Field(default_factory=RiskConfig, description="风控配置。")
+    intel: IntelConfig = Field(default_factory=IntelConfig, description="情报配置。")
     llm: LLMConfig = Field(default_factory=LLMConfig, description="大模型配置。")
     advisor: AdvisorConfig = Field(default_factory=AdvisorConfig, description="建议生成配置。")
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig, description="执行配置。")
