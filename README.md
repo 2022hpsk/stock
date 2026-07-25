@@ -27,6 +27,10 @@
 | 半自动：程序出草稿，人拍板 | 无人值守全自动托管 |
 | 日线为主 + 多周期混合 | 日内高频/做市/套利 |
 | 可复现、可审计的研究流程 | 追求"神奇指标"的黑箱 |
+| 本地部署，全部操作在可视界面完成 | 云端 SaaS / 多租户 |
+
+明确**不做**的范围见 [08-差距分析与设计补强.md](docs/08-差距分析与设计补强.md) G 节
+（期货期权、日内高频、深度学习选股、跨账户合并风控等均已划出边界）。
 
 ## 2. 关键设计决策
 
@@ -38,7 +42,8 @@
 | 数据源 | 多源适配 + 自动降级（AkShare / BaoStock / Tushare / 交易所直采） | 免费源为主，单点故障不致命 |
 | 存储 | Parquet 列存 + DuckDB 查询层 | 单机零运维，分析型查询快，天然支持 point-in-time |
 | 回测 | 自研事件驱动引擎为准绳 + 向量化引擎做参数扫描 | 向量化快但容易失真，撮合真实性以事件驱动为准 |
-| 交易通道 | miniQMT / XtQuant 适配（可插拔），默认 PaperBroker | 个人可开通、有官方 Python 接口 |
+| 交易通道 | 默认 `PaperBroker`；`ManualBroker` + `FileBridgeBroker` 为可落地主力；QMT/PTrade 为可选增强 | **miniQMT 已于 2026-07-06 停止新开通**，故券商接口不作为前置条件 |
+| 界面 | **本地 Web UI**（FastAPI + Vue 3 + ECharts），与 CLI 平级 | 所有操作含配置均可视化，`quantstock ui` 一条命令启动 |
 | 金额计算 | `Decimal`，禁止 `float` | 资金计算不允许浮点误差 |
 
 ## 3. 文档索引
@@ -54,18 +59,34 @@
 | [docs/05-风控规范.md](docs/05-风控规范.md) | A股交易规则约束、风控规则集、熔断机制 |
 | [docs/06-开发路线图.md](docs/06-开发路线图.md) | 里程碑拆解与交付顺序 |
 | [docs/07-信息情报模块.md](docs/07-信息情报模块.md) | 每日消息采集、外置导入、建议解释的四支柱证据链 |
+| [docs/08-差距分析与设计补强.md](docs/08-差距分析与设计补强.md) | 查漏补缺：幸存者偏差、过拟合防御、分红与红利税、执行端分离、绝对金额硬闸等 |
+| [docs/09-可视化界面规格.md](docs/09-可视化界面规格.md) | Web UI 全部页面、schema 驱动的可视化配置、安全设计 |
 
 ## 4. 快速开始
 
+### 推荐方式：可视化界面
+
 ```bash
-# 依赖管理使用 uv
-uv sync --all-extras
+uv sync                    # 安装依赖（无需 Node，前端已预编译）
+uv run quantstock ui --open  # 浏览器打开 http://127.0.0.1:8686
+```
 
+**之后所有操作都在界面完成**：数据初始化、全部配置、情报导入、生成建议、逐单确认下单、
+回测、复盘。首次启动会在终端打印随机 PIN 用于登录；默认仅监听本地回环地址。
+
+### 命令行方式（自动化与调试）
+
+CLI 与 Web UI 是平级入口，共用同一套服务层，行为完全一致。
+
+```bash
 # 代码检查（提交前必跑）
-make check          # ruff + mypy + pytest
+make check          # ruff + mypy + 分层依赖检查 + pytest
 
-# 初始化本地数据湖（首次约 20-40 分钟）
-uv run quantstock data init --start 2015-01-01
+# 初始化本地数据湖
+# 核心池（沪深300+中证500+主要ETF，约900只）~20 分钟，可立即开始研究
+uv run quantstock data init --tier core --start 2015-01-01
+# 全市场数小时，支持断点续传，可后台慢慢补
+uv run quantstock data init --tier all --start 2015-01-01
 
 # 每日增量更新
 uv run quantstock data update
@@ -83,12 +104,20 @@ uv run quantstock advise --account main --output report
 
 # 确认并执行（半自动，逐单确认）
 uv run quantstock execute --plan var/plans/2026-07-27.json --confirm
+
+# 出问题时一键急停（所有下单路径立即拒绝）
+uv run quantstock halt --reason "发现数据异常"
+uv run quantstock cancel-all
 ```
 
 ## 5. 目录结构
 
 ```
+frontend/        Web UI 前端（Vue3+TS+Vite+ECharts），构建产物随包分发
 src/quantstock/
+├── web/         Web UI 后端：FastAPI 路由、WebSocket、静态托管（无业务逻辑）
+├── cli/         命令行入口（无业务逻辑）
+├── services/    应用服务层：用例编排，Web 与 CLI 共用同一实现
 ├── config/      配置模型与加载（pydantic-settings）
 ├── infra/       日志、缓存、时钟、交易日历、异常、存储
 ├── data/        数据源适配器 + 数据湖读写 + 质量校验

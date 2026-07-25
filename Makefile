@@ -1,7 +1,10 @@
-.PHONY: help install fmt lint type test check arch secrets clean
+.PHONY: help install fmt lint type test check arch secrets clean ui ui-dev ui-build
 
 help:
 	@echo "install  安装依赖（uv sync）"
+	@echo "ui       启动本地可视化界面 http://127.0.0.1:8686"
+	@echo "ui-dev   前端开发模式（Vite 热更新，需 Node）"
+	@echo "ui-build 构建前端产物到 src/quantstock/web/static/"
 	@echo "fmt      格式化代码"
 	@echo "lint     ruff 静态检查"
 	@echo "type     mypy 严格类型检查"
@@ -12,6 +15,15 @@ help:
 
 install:
 	uv sync --all-extras --all-groups
+
+ui:
+	uv run quantstock ui --open
+
+ui-dev:
+	cd frontend && npm install && npm run dev
+
+ui-build:
+	cd frontend && npm install && npm run build
 
 fmt:
 	uv run ruff format src tests

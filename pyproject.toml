@@ -24,27 +24,31 @@ dependencies = [
     "apscheduler>=3.10",
     "python-dateutil>=2.9",
     # 数据源
-    "akshare>=1.14",
+    # ⚠️ AkShare 接口与列名变动频繁，锁定次版本；升级需专门提交并跑契约测试（见 08 号文档 C3）
+    "akshare>=1.14,<1.20",
     "baostock>=0.8.9",
     "requests>=2.32",
     "httpx>=0.27",
-    # 情报模块
+    # 情报模块（SimHash 自实现，不引入维护不活跃的 simhash 包，见 08 号文档 C4）
     "beautifulsoup4>=4.12",
     "lxml>=5.2",
     "feedparser>=6.0",
-    "simhash>=2.1",
+    # Web UI（F20：所有操作均可在界面完成，故为主依赖而非可选）
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "websockets>=12.0",
     # CLI 与报告
     "typer>=0.12",
     "rich>=13.7",
     "jinja2>=3.1",
-    "plotly>=5.22",
 ]
 
 [project.optional-dependencies]
 tushare = ["tushare>=1.4"]
 llm = ["anthropic>=0.40"]
-serve = ["fastapi>=0.111", "uvicorn>=0.30"]
-# XtQuant 由券商 miniQMT 客户端提供，不通过 PyPI 安装，见 docs/03-功能规格.md F8.2
+charts = ["plotly>=5.22"]   # 静态 HTML 报告用；Web UI 的图表由前端 ECharts 负责
+# XtQuant / PTrade SDK 由券商客户端环境提供，不通过 PyPI 安装，见 docs/03-功能规格.md F8.2 与 F15
 
 [dependency-groups]
 dev = [
@@ -128,7 +132,7 @@ plugins = ["pydantic.mypy"]
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["akshare.*", "baostock.*", "tushare.*", "simhash.*", "feedparser.*", "plotly.*", "xtquant.*"]
+module = ["akshare.*", "baostock.*", "tushare.*", "feedparser.*", "plotly.*", "xtquant.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest
@@ -166,7 +170,8 @@ root_package = "quantstock"
 name = "分层架构：依赖只能向下"
 type = "layers"
 layers = [
-    "quantstock.cli",
+    "quantstock.web | quantstock.cli",
+    "quantstock.services",
     "quantstock.advisor",
     "quantstock.execution | quantstock.reporting | quantstock.portfolio | quantstock.risk | quantstock.strategy | quantstock.account",
     "quantstock.backtest | quantstock.factors",
@@ -188,5 +193,17 @@ type = "forbidden"
 source_modules = [
     "quantstock.data", "quantstock.intel", "quantstock.factors", "quantstock.strategy",
     "quantstock.portfolio", "quantstock.risk", "quantstock.backtest", "quantstock.advisor",
+    "quantstock.web", "quantstock.cli", "quantstock.services",
 ]
 forbidden_modules = ["xtquant"]
+
+# F20.1：UI 与 CLI 都是"薄"客户端，业务逻辑只能在 services 及以下
+[[tool.importlinter.contracts]]
+name = "web 与 cli 只能依赖 services 与 config"
+type = "forbidden"
+source_modules = ["quantstock.web", "quantstock.cli"]
+forbidden_modules = [
+    "quantstock.advisor", "quantstock.execution", "quantstock.reporting",
+    "quantstock.portfolio", "quantstock.risk", "quantstock.strategy", "quantstock.account",
+    "quantstock.backtest", "quantstock.factors", "quantstock.intel", "quantstock.data",
+]

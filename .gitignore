@@ -36,6 +36,12 @@ htmlcov/
 coverage.xml
 .hypothesis/
 
+# ---- 前端 ----
+node_modules/
+frontend/dist/
+src/quantstock/web/static/
+.vite/
+
 # ---- IDE / OS ----
 .idea/
 .vscode/
