@@ -1,0 +1,69 @@
+# 交易成本与市场规则参数（详见 docs/05-风控规范.md 第五节）
+#
+# ⚠️ 全部费率与限制做成"按生效日期的区间表"，回测按历史口径、实盘按当前口径。
+# ⚠️ 核对日期：2026-07-25。实盘前请以自己券商的实际费率与交易所最新公告二次核对。
+
+commission:
+  # 券商佣金，最低 5 元/笔
+  - { effective_from: "1990-01-01", rate: 0.00025, min_fee: 5.0, note: "默认万2.5，按自己券商实际调整" }
+
+stamp_tax:
+  # 印花税，仅卖出单边
+  - { effective_from: "1990-01-01", effective_to: "2023-08-27", rate: 0.001,  side: SELL }
+  - { effective_from: "2023-08-28", rate: 0.0005, side: SELL, note: "2023-08-28 起减半" }
+
+transfer_fee:
+  # 过户费，双向
+  - { effective_from: "2015-08-01", effective_to: "2022-04-28", rate: 0.00002, side: BOTH, exchanges: [SH] }
+  - { effective_from: "2022-04-29", rate: 0.00001, side: BOTH, note: "沪深统一为成交额的 0.001%，双向" }
+
+exchange_fee:
+  # 经手费（多数券商已含在佣金内，视"全佣/净佣"配置）
+  - { effective_from: "2023-08-28", rate: 0.0000341, side: BOTH, included_in_commission: true }
+
+regulatory_fee:
+  # 证管费
+  - { effective_from: "1990-01-01", rate: 0.00002, side: BOTH, included_in_commission: true }
+
+# ETF/LOF：无印花税、无过户费
+etf_overrides:
+  stamp_tax: 0.0
+  transfer_fee: 0.0
+
+# ---------------------------------------------------------------- 涨跌幅限制
+# ⚠️ 沪深主板风险警示股票涨跌幅由 5% 调整为 10%，自 2026-07-06 起施行。
+#    回测历史区间必须使用当时口径，不得用当前值回溯。
+price_limits:
+  - { board: main,  is_st: false, effective_from: "1996-12-16", pct: 0.10 }
+  - { board: main,  is_st: true,  effective_from: "1996-12-16", effective_to: "2026-07-05", pct: 0.05 }
+  - { board: main,  is_st: true,  effective_from: "2026-07-06", pct: 0.10 }
+  - { board: gem,   is_st: false, effective_from: "2020-08-24", pct: 0.20 }
+  - { board: gem,   is_st: true,  effective_from: "2020-08-24", pct: 0.20 }
+  - { board: star,  is_st: false, effective_from: "2019-07-22", pct: 0.20 }
+  - { board: bse,   is_st: false, effective_from: "2021-11-15", pct: 0.30 }
+  - { board: etf,   is_st: false, effective_from: "1990-01-01", pct: 0.10 }
+# 新股上市前 5 个交易日：创业板/科创板/北交所不设涨跌幅限制
+new_listing_no_limit_days:
+  gem: 5
+  star: 5
+  bse: 5
+
+# ---------------------------------------------------------------- 撮合与滑点
+lot_size:
+  default: 100
+  star_min_qty: 200      # 科创板最低 200 股，之后可按 1 股递增
+  star_step: 1
+max_order_qty: 1000000   # 单笔限价申报上限（沪深主板）
+
+slippage:
+  model: impact          # fixed_bps / volatility / impact
+  fixed_bps: { buy: 5, sell: 5 }
+  volatility: { k: 0.15 }
+  impact: { k: 0.10 }
+
+backtest_matching:
+  fill_price: next_open       # 次日开盘价成交（保守）
+  max_volume_pct: 0.05        # 单笔不超过当日成交量的 5%
+  limit_up_buy_fill_prob: 0.0 # 涨停买入成交概率
+  limit_down_sell_fill_prob: 0.0
+  reject_suspended: true

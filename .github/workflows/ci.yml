@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CI 中禁止真实网络数据源与真实券商通道
+  QUANTSTOCK_ENV: ci
+  QUANTSTOCK_BROKER: paper
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff format --check src tests
+          uv run ruff check src tests
+
+      - name: Type check (mypy --strict)
+        run: uv run mypy
+
+      - name: Architecture layering (import-linter)
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest -m "not network"
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,85 @@
+# 信息情报模块配置（详见 docs/07-信息情报模块.md）
+
+enabled: true
+# 情报缺失不阻断建议生成，只在日报中标注
+fail_open: true
+retention_days: 1095
+
+sources:
+  cls_telegraph:       { enabled: true,  tier: MEDIA,    domains: [MARKET, COMPANY, POLICY], interval_min: 10 }
+  eastmoney_news:      { enabled: true,  tier: MEDIA,    domains: [COMPANY, MARKET],         interval_min: 60 }
+  eastmoney_research:  { enabled: true,  tier: RESEARCH, domains: [COMPANY, INDUSTRY],       interval_min: 720 }
+  exchange_announce:   { enabled: true,  tier: OFFICIAL, domains: [COMPANY],                 interval_min: 30 }
+  cninfo:              { enabled: true,  tier: OFFICIAL, domains: [COMPANY],                 interval_min: 60 }
+  jin10:               { enabled: false, tier: MEDIA,    domains: [MACRO, MARKET, OVERSEAS, CALENDAR], interval_min: 10 }
+    # 需 JIN10_API_KEY，见 https://open.jin10.com/ ；免费引用页服务已于 2025-12-01 停止
+  rss:
+    enabled: true
+    tier: MEDIA
+    feeds: []          # 用户自行添加：[{name: "xxx", url: "https://...", domains: [INDUSTRY]}]
+
+# ★ 外置导入（docs/07 第五节）
+external:
+  inbox:
+    enabled: true
+    path: var/intel/inbox
+    scan_interval_min: 10
+    default_tier: USER
+  http_ingest:
+    enabled: false          # quantstock intel serve 启动
+    host: 127.0.0.1
+    port: 8787
+    # token 来自环境变量 INTEL_INGEST_TOKEN
+  plugins:
+    enabled: true
+    path: plugins/intel_sources
+  max_importance: 90        # 人工导入的重要性上限，防止单一输入压过量化信号
+
+dedupe:
+  simhash_threshold: 0.90
+  time_window_hours: 6
+  # 多源印证提升重要性
+  corroboration_bonus: 5
+
+importance:
+  weights:
+    source_tier: 0.25       # OFFICIAL 100 / RESEARCH 70 / MEDIA 60 / SOCIAL 30 / USER 按声明
+    event_type: 0.30
+    corroboration: 0.10
+    portfolio_hit: 0.20     # 命中持仓/候选池
+    recency: 0.10
+    mandatory_disclosure: 0.05
+  report_threshold: 70      # 进入日报"重大消息"置顶区
+  risk_threshold: 80        # 触发风险否决评估
+
+sentiment:
+  use_llm: false            # 开启后必须标注 sentiment_source（I-R3）
+  divergence_alert: 0.5     # 规则分与 LLM 分分歧超此值则在日报标注
+
+# 通路1：风险否决（docs/07 第六节）
+risk_veto:
+  enabled: true
+  event_types: [REGULATORY_PROBE, AUDIT_QUALIFIED, DELISTING_RISK, CONTROL_CHANGE, GUARANTEE_RISK]
+  min_importance: 80
+  required_tiers: [OFFICIAL, MEDIA]
+  negative_event_count_window_days: 60
+  negative_event_count_threshold: 3
+  blacklist_days: 60
+
+# 通路2：软因子（有界）
+soft_factors:
+  enabled: false            # M6 阶段开启，需先通过 IC 检验
+  max_score_influence: 0.20 # 对最终打分的影响上限 ±20%
+  factors: [intel_sentiment_20d, intel_attention, intel_event_shock]
+
+digest:
+  pre_market_time: "08:30"
+  post_market_time: "18:30"
+  top_n: 10
+  upcoming_days: 7
+
+fetch:
+  rate_limit_per_min: 30    # 礼貌抓取
+  timeout_sec: 15
+  user_agent: "quantstock/0.1 (personal research)"
+  respect_robots_txt: true

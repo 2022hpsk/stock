@@ -1,0 +1,76 @@
+# 通用配置。本地覆盖请写 config/local.yaml（已 gitignore）。
+
+app:
+  timezone: Asia/Shanghai
+  var_dir: ./var
+  log_level: INFO
+  log_format: json          # json / console
+  random_seed: 20260101     # 固定随机种子，保证可复现（开发规范 R6）
+
+data:
+  start_date: "2015-01-01"
+  # 降级链：按顺序尝试，全部失败则当日不出建议
+  source_chain: [tushare, akshare, baostock]
+  adjust_for_research: hfq
+  adjust_for_trading: none
+  minute_freqs: [M1, M5, M30]
+  minute_universe: [holdings, watchlist, candidates]   # 分钟线只覆盖这些池
+  minute_retention_days: 730
+  rate_limit_per_min: 60
+  cache_ttl_sec: 3600
+
+quality:
+  fail_on: [DQ01, DQ02, DQ03, DQ04]      # 致命级：拒绝入库
+  warn_on: [DQ05, DQ06, DQ07, DQ08, DQ09, DQ10]
+  coverage_threshold: 0.99
+  cross_check_sample_pct: 0.01
+  cross_check_max_deviation: 0.005
+  # 关键字段缺失超此比例则当日不出建议
+  abort_advise_missing_ratio: 0.02
+
+factors:
+  winsorize: { method: mad, n: 3 }
+  fillna: industry_median
+  standardize: zscore
+  neutralize: [industry, market_cap]
+  eval:
+    ic_window_days: 756          # 约 3 年
+    layers: 5
+
+portfolio:
+  weighting: score_weighted      # equal / score_weighted / risk_parity / inverse_vol / mean_variance
+  top_n: 10
+
+risk:
+  circuit_breaker:
+    watch:  { daily_loss: 0.03, drawdown_20d: 0.12 }
+    halted: { daily_loss: 0.05, drawdown_20d: 0.18 }
+    recover_days: 3
+    recover_drawdown: 0.08
+  correlation_alert: { window: 60, threshold: 0.85, combined_weight: 0.25 }
+
+advisor:
+  plan_valid_days: 1             # 计划仅当日有效
+  price_drift_threshold: 0.03    # T+1 开盘价漂移超此值该单标记 STALE
+  require_full_rationale: true   # 缺支柱的建议不进入 TradePlan（F7.3）
+  price_band_pct: 0.006          # 建议限价区间宽度（相对参考价 ±0.6%）
+
+execution:
+  broker: paper                  # paper / manual / xtquant
+  require_manual_confirm: true   # 真实通道下强制为 true，不可关闭（R5）
+  cancel_unfilled_before: "14:50"
+  split_order_threshold_pct: 0.02  # 超过当日成交量此比例则拆单
+
+schedule:
+  daily_bars: "15:05"
+  minute_bars: "15:10"
+  valuation: "15:15"
+  moneyflow: "18:00"
+  fundamentals: "20:00"
+  factors: "15:30"
+  advise: "16:00"
+  notify: "16:25"
+
+notify:
+  channels: [console]            # console / email / wecom / telegram / file
+  on_events: [daily_report, risk_alert, circuit_breaker, data_failure, intel_critical]

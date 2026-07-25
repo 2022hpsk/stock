@@ -1,0 +1,47 @@
+# ---- 运行时数据（含真实账户信息，严禁入库，见开发规范 R7）----
+var/
+data_lake/
+*.parquet
+*.duckdb
+
+# ---- 密钥与本地配置 ----
+.env
+.env.*
+!.env.example
+config/local.yaml
+config/accounts.yaml
+config/blacklist.yaml
+
+# 用户自定义情报源插件（个人渠道，不入库；目录本身保留）
+plugins/intel_sources/*.py
+!plugins/intel_sources/example_source.py.tpl
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# ---- 工具缓存 ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+.DS_Store
+
+# ---- 日志与报告输出 ----
+logs/
+*.log
+reports/

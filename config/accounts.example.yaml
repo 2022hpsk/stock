@@ -1,0 +1,58 @@
+# 复制为 config/accounts.yaml（已 gitignore）后填写真实信息。
+# 真实资金账号、持仓明细严禁提交（开发规范 R7）。
+
+accounts:
+  main:
+    name: "主账户"
+    broker: paper                 # paper / manual / xtquant
+    currency: CNY
+
+    # ---- 投资意向与风险偏好（功能规格 F4.2）----
+    risk_profile: moderate        # conservative / moderate / aggressive
+    max_equity_exposure: 0.90     # 权益类占总资产上限
+    min_cash_ratio: 0.05          # 现金下限
+    max_single_position: 0.15     # 单标的占比上限
+    max_industry_exposure: 0.30   # 单行业（申万一级）占比上限
+    max_holdings: 12              # 最大持仓只数
+    min_position_value: 5000      # 单笔最小成交金额（元）
+    rebalance_band: 0.02          # 调仓缓冲带，偏离小于此值不动
+    turnover_budget_monthly: 0.50 # 月度换手预算
+    max_daily_turnover: 0.20      # 单日换手上限
+
+    # ---- 目标与止损 ----
+    target_annual_return: 0.15
+    max_tolerable_drawdown: 0.20  # 触及即进入 HALTED 并强制复盘
+    stop_loss_pct: 0.12           # 个股硬止损（相对成本）
+    trailing_stop_pct: 0.15       # 移动止损（相对持仓期最高价）
+    atr_stop_multiple: 2.5
+
+    # ---- 标的范围 ----
+    universe:
+      include: [hs300, zz500, etf_broad, etf_industry]
+      exclude_boards: [bse]       # 未开通权限的板块
+      exclude_flags: [ST, ST_STAR, DELISTING_RISK]
+      min_list_days: 120          # 排除次新股
+      min_market_cap: 3.0e9       # 最小市值（元）
+      min_avg_amount_20d: 3.0e7   # 近20日日均成交额下限（元）
+
+    # ---- 核心-卫星结构 ----
+    structure:
+      core_ratio: 0.60            # 核心仓（ETF/低波稳健）
+      satellite_ratio: 0.40       # 卫星仓（个股进攻）
+
+    # ---- 策略权重（多周期融合）----
+    strategies:
+      macro_exposure:  { enabled: true, layer: LONG }
+      quality_value:   { enabled: true, layer: MEDIUM, weight: 0.5 }
+      momentum_trend:  { enabled: true, layer: MEDIUM, weight: 0.3 }
+      etf_rotation:    { enabled: true, layer: MEDIUM, weight: 0.2 }
+      timing_overlay:  { enabled: true, layer: SHORT }
+
+    # ---- 持仓录入（M3 手工方式；接入券商后自动同步）----
+    # 文件位置：var/accounts/main/positions.yaml，此处仅示意结构
+    # positions:
+    #   - symbol: 600519.SH
+    #     qty: 1000
+    #     available_qty: 1000        # T+1 可卖量
+    #     cost_price: "1612.30"      # 字符串，避免浮点误差
+    #     first_open_date: 2026-05-18
