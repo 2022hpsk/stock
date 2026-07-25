@@ -38,6 +38,8 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "websockets>=12.0",
+    # 大模型（F21：参与情报理解、研判归纳、解释生成，故为主依赖）
+    "anthropic>=0.40",
     # CLI 与报告
     "typer>=0.12",
     "rich>=13.7",
@@ -46,7 +48,6 @@ dependencies = [
 
 [project.optional-dependencies]
 tushare = ["tushare>=1.4"]
-llm = ["anthropic>=0.40"]
 charts = ["plotly>=5.22"]   # 静态 HTML 报告用；Web UI 的图表由前端 ECharts 负责
 # XtQuant / PTrade SDK 由券商客户端环境提供，不通过 PyPI 安装，见 docs/03-功能规格.md F8.2 与 F15
 
@@ -177,9 +178,17 @@ layers = [
     "quantstock.backtest | quantstock.factors",
     "quantstock.intel",
     "quantstock.data",
+    "quantstock.llm",
     "quantstock.infra",
     "quantstock.config",
 ]
+
+# LR1：风控与执行链路不得受大模型影响
+[[tool.importlinter.contracts]]
+name = "risk / portfolio / execution 禁止依赖 llm"
+type = "forbidden"
+source_modules = ["quantstock.risk", "quantstock.portfolio", "quantstock.execution"]
+forbidden_modules = ["quantstock.llm", "anthropic"]
 
 [[tool.importlinter.contracts]]
 name = "data 层不得依赖 intel 层"

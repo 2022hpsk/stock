@@ -1,0 +1,85 @@
+# 大模型集成配置（详见 docs/10-大模型集成规格.md）
+#
+# 核心边界：LLM 做「非结构化文本 → 结构化特征」，量化做「结构化特征 → 决策」。
+# LLM 只有 conviction_adjustment 一个数值出口，且被 α 严格限幅。
+# 风控、组合、执行链路完全在 LLM 影响范围之外（LR1，由 import-linter 强制）。
+
+enabled: true
+mode: live                      # off / live / replay —— 回测由引擎强制设为 replay
+temperature: 0.0                # 最大化确定性
+timeout_sec: 60
+max_retries: 3
+
+# ---------------------------------------------------------------- 影响边界（LR2）
+max_influence: 0.15             # α：final_score = base_score × (1 + α × conviction_adjustment)
+max_influence_hard_cap: 0.20    # 硬上限，配置值超过此数直接拒绝启动
+allow_disable: true             # 必须保持 true —— 关闭 LLM 后系统须完整可用
+
+# ---------------------------------------------------------------- 防训练集泄漏（LR4）
+anonymize_in_backtest: true     # 回测中把标的名替换为代号
+anonymize_in_live: false
+strip_absolute_dates: true      # prompt 中用相对表述而非绝对日期
+leakage_test:
+  enabled: true
+  max_divergence: 0.10          # 真实名 vs 虚构名的输出差异率上限，超过则 CI 失败
+
+# ---------------------------------------------------------------- 缓存与回放（LR3）
+cache:
+  dir: var/llm_cache
+  enabled: true
+  # 缓存键 = sha256(task_id + prompt_version + model_id + temperature + top_p + input)
+  fail_on_miss_in_replay: false # replay 模式缓存未命中时：false=按"无 LLM 输出"处理并记录
+
+# ---------------------------------------------------------------- 成本控制（LR7）
+budget:
+  daily_usd: 2.0
+  monthly_usd: 30.0
+  on_exceed: degrade_to_off     # degrade_to_off / raise
+rate_limit_per_min: 20
+usage_log_dir: var/llm_usage
+
+# ---------------------------------------------------------------- 任务配置
+models:
+  fast: claude-haiku-4-5-20251001   # 量大任务
+  main: claude-sonnet-5             # 研判与解释
+  deep: claude-opus-5               # 复杂研判，默认不启用
+
+tasks:
+  # L1 情报理解：事件分类、情绪、要点抽取
+  intel_classify:
+    enabled: true
+    model: fast
+    only_if_rules_miss: true    # 规则/词典能处理的不调 LLM，大幅省钱
+    prompt_version: v1
+
+  # L2 研判归纳：证据包 → 结构化研判（唯一数值出口）
+  position_judge:
+    enabled: true
+    model: main
+    max_symbols_per_day: 30     # 只对持仓 + 候选 Top N 做，不对全市场做
+    prompt_version: v1
+
+  # L2 市场环境定性
+  market_judge:
+    enabled: true
+    model: main
+    freq: daily
+    prompt_version: v1
+
+  # L3 解释生成：不改变任何数字
+  explain:
+    enabled: true
+    model: main
+    prompt_version: v1
+
+# ---------------------------------------------------------------- 反幻觉校验（LR5）
+validation:
+  require_evidence_ref: true    # 结论必须引用真实存在的材料 ID，否则整个输出作废
+  strict_enum: true             # 枚举值不合法即作废
+  on_parse_failure: skip        # skip = 本次不使用 LLM（绝不让模型自由发挥）
+
+# ---------------------------------------------------------------- A/B 验证门槛（LR6）
+ab_gate:
+  require_out_of_sample_gain: true   # 样本外必须同样成立
+  min_sharpe_gain: 0.10              # 低于此值不认为有增量
+  deduct_api_cost: true              # 增量需扣除 API 成本折算

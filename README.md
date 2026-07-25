@@ -19,6 +19,10 @@
 **每条建议的解释由四支柱构成**：① 量化因子依据 ② 持仓成本与技术分析 ③ 最新消息证据（带原文链接）
 ④ 反面证据与证伪条件。缺任一支柱的建议不会进入交易计划。
 
+**大模型的位置**：LLM 负责「非结构化文本 → 结构化特征」（情报理解、研判归纳、解释生成），
+量化负责「结构化特征 → 决策」。LLM 只有 `conviction_adjustment` 一个数值出口且被 α≤20% 限幅，
+风控与执行链路完全不受其影响；全量缓存快照使**含 LLM 的完整逻辑可以按历史区间复现回测**。
+
 **核心定位边界（务必先读）：**
 
 | 是 | 不是 |
@@ -44,6 +48,7 @@
 | 回测 | 自研事件驱动引擎为准绳 + 向量化引擎做参数扫描 | 向量化快但容易失真，撮合真实性以事件驱动为准 |
 | 交易通道 | 默认 `PaperBroker`；`ManualBroker` + `FileBridgeBroker` 为可落地主力；QMT/PTrade 为可选增强 | **miniQMT 已于 2026-07-06 停止新开通**，故券商接口不作为前置条件 |
 | 界面 | **本地 Web UI**（FastAPI + Vue 3 + ECharts），与 CLI 平级 | 所有操作含配置均可视化，`quantstock ui` 一条命令启动 |
+| 大模型 | Claude API（Haiku 批量分类 / Sonnet 研判解释），影响有界且可关闭 | 增强项而非依赖项；关闭后系统退化为纯量化仍完整可用 |
 | 金额计算 | `Decimal`，禁止 `float` | 资金计算不允许浮点误差 |
 
 ## 3. 文档索引
@@ -61,6 +66,8 @@
 | [docs/07-信息情报模块.md](docs/07-信息情报模块.md) | 每日消息采集、外置导入、建议解释的四支柱证据链 |
 | [docs/08-差距分析与设计补强.md](docs/08-差距分析与设计补强.md) | 查漏补缺：幸存者偏差、过拟合防御、分红与红利税、执行端分离、绝对金额硬闸等 |
 | [docs/09-可视化界面规格.md](docs/09-可视化界面规格.md) | Web UI 全部页面、schema 驱动的可视化配置、安全设计 |
+| [docs/10-大模型集成规格.md](docs/10-大模型集成规格.md) | LLM 任务边界、防训练集泄漏、缓存回放（让含 LLM 的逻辑可回测）、A/B 验证 |
+| [docs/11-持仓账本规格.md](docs/11-持仓账本规格.md) | 不可变流水、批次 FIFO、双口径成本、红利税、对账、TWR/MWR |
 
 ## 4. 快速开始
 
@@ -105,6 +112,15 @@ uv run quantstock advise --account main --output report
 # 确认并执行（半自动，逐单确认）
 uv run quantstock execute --plan var/plans/2026-07-27.json --confirm
 
+# 大模型：先对历史区间批量预计算并缓存，之后回测可零成本反复重跑且结果一致
+uv run quantstock llm cost-estimate --task intel_classify --from 2023-01-01 --to 2025-12-31
+uv run quantstock llm backfill --task intel_classify --from 2023-01-01 --to 2025-12-31
+
+# 回测（含 LLM 逻辑，强制 replay 模式保证可复现）
+uv run quantstock backtest run --strategy quality_value --from 2023-01-01 --to 2025-12-31
+# A/B 验证大模型到底有没有用（没有净增量就别开）
+uv run quantstock backtest ab --arm-a "llm.mode=off" --arm-b "llm.mode=replay"
+
 # 出问题时一键急停（所有下单路径立即拒绝）
 uv run quantstock halt --reason "发现数据异常"
 uv run quantstock cancel-all
@@ -122,6 +138,7 @@ src/quantstock/
 ├── infra/       日志、缓存、时钟、交易日历、异常、存储
 ├── data/        数据源适配器 + 数据湖读写 + 质量校验
 ├── intel/       信息情报：多源资讯采集、去重、事件分类、外置导入、分域摘要
+├── llm/         大模型：客户端、缓存回放、反幻觉校验、情报理解/研判/解释三类任务
 ├── factors/     因子计算（技术/基本面/资金/情绪）
 ├── strategy/    策略与信号生成
 ├── backtest/    回测引擎、撮合、成本模型、绩效指标
