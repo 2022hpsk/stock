@@ -7,6 +7,7 @@ from quantstock.services.execution_service import (
     IntentPreview,
 )
 from quantstock.services.intel_service import IntelService, IntelStatus
+from quantstock.services.llm_service import LLMService, LLMStatus
 from quantstock.services.system_service import SystemService, SystemStatus
 
 __all__ = [
@@ -16,6 +17,8 @@ __all__ = [
     "IntelService",
     "IntelStatus",
     "IntentPreview",
+    "LLMService",
+    "LLMStatus",
     "SaveResult",
     "SystemService",
     "SystemStatus",

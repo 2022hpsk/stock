@@ -31,6 +31,7 @@ from quantstock.services.execution_service import (
     SkipReason,
 )
 from quantstock.services.intel_service import IntelDomain, IntelService, parse_payload
+from quantstock.services.llm_service import LLMService
 from quantstock.services.system_service import SystemService
 
 app = typer.Typer(
@@ -518,6 +519,69 @@ def intel_blacklist(config_dir: ConfigDirOption = Path("config")) -> None:
     console.print(f"[red]● 情报黑名单 {len(entries)} 只（禁止买入）[/red]")
     for entry in entries:
         console.print(f"  {entry.explain()}")
+
+
+# ---------------------------------------------------------------- 大模型
+llm_app = typer.Typer(help="大模型：状态、缓存、预算。", no_args_is_help=True)
+app.add_typer(llm_app, name="llm")
+
+
+@llm_app.command("status")
+def llm_status(config_dir: ConfigDirOption = Path("config")) -> None:
+    """显示 LLM 状态、缓存与用量。"""
+    settings = load_settings(config_dir)
+    snapshot = LLMService(settings).status()
+
+    console.print(snapshot.message)
+    if not snapshot.enabled:
+        return
+
+    table = Table(show_header=True)
+    table.add_column("项", style="cyan")
+    table.add_column("值")
+    table.add_row("模式", snapshot.mode)
+    table.add_row("影响系数 α", f"{snapshot.alpha:.2f}（硬上限 0.20）")
+    table.add_row("提示词版本", snapshot.prompt_version)
+    table.add_row("缓存条目", str(snapshot.cached_entries))
+    table.add_row("缓存累计花费", f"${snapshot.cached_cost_usd:.4f}")
+    table.add_row("当日花费", f"${snapshot.daily_spent_usd:.4f}")
+    table.add_row("当月花费", f"${snapshot.monthly_spent_usd:.4f}")
+    console.print(table)
+
+    if snapshot.degraded:
+        console.print(f"[yellow]⚠ 已降级为纯量化：{snapshot.degraded_reason}[/yellow]")
+
+
+@llm_app.command("coverage")
+def llm_coverage(config_dir: ConfigDirOption = Path("config")) -> None:
+    """查看缓存覆盖情况。
+
+    回测前应确认覆盖率足够——命中率低意味着大量决策点根本没有 LLM 输出，
+    此时"含 LLM 的 A/B 回测"实际在比较两条几乎相同的路径。
+    """
+    settings = load_settings(config_dir)
+    service = LLMService(settings)
+    cache = service.cache()
+
+    if cache is None:
+        console.print("[yellow]未配置缓存目录[/yellow]")
+        raise typer.Exit(1)
+
+    console.print(f"缓存目录：{service.cache_dir()}")
+    table = Table(show_header=True)
+    table.add_column("任务", style="cyan")
+    table.add_column("条目数", justify="right")
+    table.add_column("累计花费", justify="right")
+
+    total = 0
+    for task in ("intel_classify", "position_judge", "market_judge", "explain"):
+        count = cache.count(task)
+        total += count
+        table.add_row(task, str(count), f"${cache.total_cost(task):.4f}")
+    console.print(table)
+
+    if total == 0:
+        console.print("[yellow]缓存为空。回测前请先执行 llm backfill 预计算。[/yellow]")
 
 
 if __name__ == "__main__":  # pragma: no cover
