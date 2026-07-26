@@ -27,11 +27,13 @@ from quantstock.web.events import parse_channels
 from quantstock.web.routers import (
     account_router,
     advisor_router,
+    audit_router,
     backtest_router,
     data_router,
     execution_router,
     intel_router,
     llm_router,
+    portfolio_router,
     review_router,
     risk_router,
 )
@@ -129,9 +131,11 @@ def create_app(
         advisor_router,
         execution_router,
         intel_router,
+        portfolio_router,
         backtest_router,
         risk_router,
         review_router,
+        audit_router,
         llm_router,
     ):
         app.include_router(router)

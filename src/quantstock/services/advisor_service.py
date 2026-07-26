@@ -64,7 +64,13 @@ from quantstock.strategy.builtin import (
 from quantstock.strategy.types import Evidence, Signal, Strategy, StrategyContext
 
 # CLI 与界面只允许依赖 services（F20.1 分层契约），计划契约在这里转出
-__all__ = ["AdviceResult", "AdvisorService", "RationaleBundle", "TradePlan"]
+__all__ = [
+    "AdviceResult",
+    "AdvisorService",
+    "RationaleBundle",
+    "TradePlan",
+    "constraints_from",
+]
 
 _log = get_logger(__name__)
 
@@ -156,7 +162,7 @@ class AdvisorService:
         self._account = AccountService(settings)
         self._ledger = ledger if ledger is not None else self._account.ledger()
         self._store = PlanStore(settings.var_dir / "plans")
-        self._constraints = _constraints_from(settings)
+        self._constraints = constraints_from(settings)
         self._risk = RiskEngine(constraints=self._constraints)
 
     @property
@@ -680,7 +686,7 @@ def _impact_of(sentiment: float) -> IntelImpact:
     return IntelImpact.NEUTRAL
 
 
-def _constraints_from(settings: Settings) -> PortfolioConstraints:
+def constraints_from(settings: Settings) -> PortfolioConstraints:
     """由配置构造组合约束。
 
     ``PortfolioConfig`` 与 ``PortfolioConstraints`` 是两套字段——前者面向界面

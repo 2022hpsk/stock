@@ -9,22 +9,26 @@ from __future__ import annotations
 
 from quantstock.web.routers.account import router as account_router
 from quantstock.web.routers.advisor import router as advisor_router
+from quantstock.web.routers.audit import router as audit_router
 from quantstock.web.routers.backtest import router as backtest_router
 from quantstock.web.routers.data import router as data_router
 from quantstock.web.routers.execution import router as execution_router
 from quantstock.web.routers.intel import router as intel_router
 from quantstock.web.routers.llm import router as llm_router
+from quantstock.web.routers.portfolio import router as portfolio_router
 from quantstock.web.routers.review import router as review_router
 from quantstock.web.routers.risk import router as risk_router
 
 __all__ = [
     "account_router",
     "advisor_router",
+    "audit_router",
     "backtest_router",
     "data_router",
     "execution_router",
     "intel_router",
     "llm_router",
+    "portfolio_router",
     "review_router",
     "risk_router",
 ]

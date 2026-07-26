@@ -40,7 +40,7 @@ from quantstock.services.advisor_service import (
     DEFAULT_STRATEGY_WEIGHTS,
     MIN_HISTORY_BARS,
     AdvisorService,
-    _constraints_from,
+    constraints_from,
 )
 from quantstock.services.data_service import DataService
 from quantstock.strategy.builtin import (
@@ -143,7 +143,7 @@ class BacktestService:
         self._settings = settings
         self._data = data or DataService(settings)
         self._trials = TrialLog(settings.var_dir / "research" / "trials.jsonl")
-        self._constraints = _constraints_from(settings)
+        self._constraints = constraints_from(settings)
 
     @property
     def trials(self) -> TrialLog:

@@ -441,3 +441,85 @@ class TestAbortedExecution:
         deviation = client.get(f"/api/review/deviation/{plan['trade_date']}").json()
         assert deviation["available"] is True
         assert deviation["aborted"] is True
+
+
+class TestAuditAndPortfolio:
+    """P15 审计与 P9 组合。"""
+
+    def test_reproduction_is_the_evidence_for_r6(
+        self, client: TestClient, plan: dict[str, Any]
+    ) -> None:
+        # 把指纹存下来只证明"当时算过"。重算一遍并比对，才证明"现在还能算出
+        # 同样的结果"——这才是红线 R6 真正被满足的证据
+        date = plan["plan"]["trade_date"]
+        body = client.post(f"/api/audit/reproduce/{date}").json()
+
+        assert body["verdict"] == "identical", body["explain"]
+        assert body["fingerprint"]["match"] is True
+        assert body["param_hash"]["match"] is True
+        assert body["intents"]["match"] is True
+
+    def test_reproduction_does_not_overwrite_the_archive(
+        self, client: TestClient, plan: dict[str, Any]
+    ) -> None:
+        # 复现若覆盖了存档，就再也没有"当时"可比了
+        date = plan["plan"]["trade_date"]
+        original_id = plan["plan"]["plan_id"]
+        client.post(f"/api/audit/reproduce/{date}")
+        assert client.get(f"/api/advisor/plan/{date}").json()["plan_id"] == original_id
+
+    def test_audit_chain_links_intent_to_orders(
+        self, client: TestClient, plan: dict[str, Any]
+    ) -> None:
+        p = plan["plan"]
+        if not p["intents"]:
+            pytest.skip("本次未产生建议")
+
+        client.post(
+            "/api/execution/execute",
+            json={
+                "trade_date": p["trade_date"],
+                "plan_id": p["plan_id"],
+                "prices": {i["symbol"]: i["price_high"] for i in p["intents"]},
+                "decisions": [
+                    {"intent_id": i["intent_id"], "accepted": False, "skip_reason": "bad_timing"}
+                    for i in p["intents"]
+                ],
+            },
+        )
+
+        chain = client.get(f"/api/audit/plan/{p['trade_date']}").json()["chain"]
+        assert len(chain) == len(p["intents"])
+        # intent_id 是贯穿建议 → 订单 → 成交的锚点（红线 R6）
+        assert all(link["orders"] for link in chain)
+        assert all("跳过" in link["outcome"] for link in chain)
+
+    def test_missing_audit_date_is_404(self, client: TestClient) -> None:
+        assert client.get("/api/audit/plan/1999-01-04").status_code == 404
+
+    def test_portfolio_weights_reflect_the_plan(
+        self, client: TestClient, plan: dict[str, Any]
+    ) -> None:
+        body = client.get("/api/portfolio/weights").json()
+        assert body["plan_id"] == plan["plan"]["plan_id"]
+        if plan["plan"]["intents"]:
+            assert body["rows"]
+
+    def test_portfolio_constraints_list_breaches_individually(self, client: TestClient) -> None:
+        # 只给一个"不合规"的总判定没法行动。要知道是哪一条、超了多少
+        body = client.get("/api/portfolio/constraints").json()
+        assert "satisfied" in body
+        assert isinstance(body["breaches"], list)
+        assert body["limits"]["max_single_position"] > 0
+
+    def test_portfolio_flags_single_position_breach(self, client: TestClient) -> None:
+        # 把全部资金押在一只标的上，必须被 B01 逮住
+        client.post("/api/account/deposit", json={"amount": "100000"})
+        client.post(
+            "/api/account/trade",
+            json={"symbol": "600519.SH", "side": "buy", "qty": 60, "price": "1000"},
+        )
+        body = client.get("/api/portfolio/constraints").json()
+
+        assert body["satisfied"] is False
+        assert any(b["rule_id"] == "B01" for b in body["breaches"])
