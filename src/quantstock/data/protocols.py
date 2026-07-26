@@ -32,7 +32,14 @@ class MarketDataSource(Protocol):
     禁止让原始格式流出 ``data`` 层（见 docs/01-开发规范.md 第四条）。
     """
 
-    name: str
+    # 声明成只读属性而非可变属性。可变属性在 Protocol 里是**不变**的，
+    # 会导致 FallbackChain 这类用 @property 暴露名称的实现无法满足契约——
+    # 而降级链恰恰必须能当成普通数据源即插即用。
+    # 数据源的名称是身份，调用方本来也不该改它。
+    @property
+    def name(self) -> str:
+        """数据源标识。"""
+        ...
 
     def fetch_daily_bars(
         self,
@@ -123,6 +130,34 @@ class FallbackChain:
     def source_names(self) -> tuple[str, ...]:
         """链上各源的名称，按优先级排序。"""
         return tuple(s.name for s in self._sources)
+
+    # 下面两个成员让降级链本身**满足 MarketDataSource 契约**，
+    # 从而能被当成普通数据源即插即用。缺了它们，上层就得到处写
+    # `if isinstance(source, FallbackChain)` 分支——而那正是这个类要消除的东西。
+    @property
+    def name(self) -> str:
+        """链的名称，形如 ``chain(baostock→akshare)``。"""
+        return f"chain({'→'.join(self.source_names)})"
+
+    def health_check(self) -> SourceHealth:
+        """探测整条链的可用性。
+
+        **只要有一个源可用，整条链就算可用**——这正是降级链存在的意义。
+        message 里列出各源的实际状态，便于判断是否已经在靠备源撑着。
+
+        Returns:
+            健康度。
+        """
+        results = [source.health_check() for source in self._sources]
+        alive = [r for r in results if r.ok]
+        detail = "；".join(f"{r.name}{'✓' if r.ok else '✗'}" for r in results)
+        return SourceHealth(
+            name=self.name,
+            ok=bool(alive),
+            checked_at=now(),
+            message=f"{len(alive)}/{len(results)} 个源可用：{detail}",
+            latency_ms=min((r.latency_ms for r in alive), default=0.0),
+        )
 
     def fetch_daily_bars(
         self,

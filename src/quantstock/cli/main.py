@@ -23,8 +23,15 @@ from quantstock.config.models import RootConfig
 from quantstock.infra.clock import today
 from quantstock.infra.errors import QuantStockError
 from quantstock.infra.logging import setup_logging
-from quantstock.infra.money import quantize_cny
+from quantstock.infra.money import money, quantize_cny
 from quantstock.infra.types import Side, Symbol
+from quantstock.services.advisor_service import (
+    AdvisorService,
+    RationaleBundle,
+    TradePlan,
+)
+from quantstock.services.backtest_service import BacktestService
+from quantstock.services.data_service import DataService, build_source
 from quantstock.services.execution_service import (
     ConfirmationDecision,
     ExecutionReport,
@@ -254,26 +261,79 @@ def plan_show(
         console.print(f"[yellow]{trade_date} 没有已保存的计划[/yellow]")
         raise typer.Exit(1)
 
-    console.print(f"计划 {plan.plan_id}   {plan.trade_date}   {len(plan.intents)} 条建议")
+    _render_plan(plan)
+
+
+def _render_plan(plan: TradePlan, *, only: str | None = None) -> None:
+    """渲染交易计划。
+
+    Args:
+        plan: 交易计划。
+        only: 只渲染某只标的。
+    """
+    console.print(f"\n计划 {plan.plan_id}   {plan.trade_date}   {len(plan.intents)} 条建议")
     console.print(f"数据指纹 {plan.data_fingerprint or '—'}   参数哈希 {plan.param_hash or '—'}")
+
     for intent in plan.intents:
+        if only and str(intent.symbol) != only:
+            continue
         action = "买入" if intent.side is Side.BUY else "卖出"
         console.print(
             f"\n[bold]{action} {intent.symbol}[/bold]  {intent.qty} 股  "
             f"{quantize_cny(intent.price_low)}~{quantize_cny(intent.price_high)}"
             f"  ({intent.urgency.value})"
         )
-        console.print(f"  {intent.rationale.verdict}")
-        for line in intent.rationale.technical.statements():
-            console.print(f"    · {line}")
-        for note in intent.rationale.falsification:
-            console.print(f"    [dim]证伪：{note}[/dim]")
+        _render_rationale(intent.rationale)
+
     if plan.rejected:
-        console.print(
-            f"\n[dim]被否决 {len(plan.rejected)} 只：为什么没买与为什么买了同样重要[/dim]"
-        )
+        # "为什么没买"和"为什么买了"同样重要
+        console.print(f"\n[dim]被风控否决 {len(plan.rejected)} 只[/dim]")
         for rejected in plan.rejected:
-            console.print(f"  [dim]{rejected.symbol}  {rejected.reason}[/dim]")
+            console.print(f"  [dim]{rejected.symbol}  {escape(rejected.reason)}[/dim]")
+
+    if plan.incomplete:
+        console.print(f"\n[dim]因解释不完整被剔除 {len(plan.incomplete)} 只[/dim]")
+        for symbol, missing in plan.incomplete:
+            console.print(f"  [dim]{symbol}  缺 {escape(missing)}[/dim]")
+
+
+def _render_rationale(rationale: RationaleBundle) -> None:
+    """渲染四支柱解释。
+
+    Args:
+        rationale: 解释包。
+    """
+    console.print(f"  {escape(rationale.verdict)}")
+
+    if rationale.quant_evidence:
+        console.print("  [cyan]①量化依据[/cyan]")
+        for evidence in rationale.quant_evidence:
+            console.print(f"    · {escape(evidence.statement)}")
+
+    if lines := rationale.technical.statements():
+        console.print("  [cyan]②持仓与技术分析[/cyan]")
+        for line in lines:
+            console.print(f"    · {escape(line)}")
+
+    console.print("  [cyan]③情报证据[/cyan]")
+    if rationale.intel_evidence:
+        for news in rationale.intel_evidence:
+            console.print(
+                f"    · {escape(news.title)} — {escape(news.source)}"
+                f" · {news.published_at:%m-%d %H:%M}  🔗 {news.url}"
+            )
+    else:
+        # 无情报时必须明写，留空让人分不清"没查"和"查了没有"
+        console.print(f"    [dim]{escape(rationale.intel_absent_note or '无相关消息')}[/dim]")
+
+    console.print("  [cyan]④反面证据与证伪条件[/cyan]")
+    for counter in rationale.counter_evidence:
+        console.print(f"    · {escape(counter.statement)}")
+    for note in rationale.falsification:
+        console.print(f"    · 证伪：{escape(note)}")
+
+    if rationale.llm_involved:
+        console.print(f"  [dim]🤖 LLM 参与研判，调整量 {rationale.llm_adjustment:+.3f}[/dim]")
 
 
 @app.command()
@@ -616,6 +676,173 @@ def llm_coverage(config_dir: ConfigDirOption = Path("config")) -> None:
 
     if total == 0:
         console.print("[yellow]缓存为空。回测前请先执行 llm backfill 预计算。[/yellow]")
+
+
+# ---------------------------------------------------------------- 数据
+data_app = typer.Typer(help="行情数据：初始化、增量更新、状态。", no_args_is_help=True)
+app.add_typer(data_app, name="data")
+
+
+@data_app.command("init")
+def data_init(
+    config_dir: ConfigDirOption = Path("config"),
+    tier: Annotated[
+        str, typer.Option("--tier", help="core 约 10 只快速可用 / all 全市场")
+    ] = "core",
+    source: Annotated[str, typer.Option("--source", help="csv / baostock / akshare")] = "",
+    start: Annotated[str, typer.Option("--start", help="起始日 YYYY-MM-DD")] = "",
+) -> None:
+    """初始化数据湖：拉取标的表与历史行情。"""
+    settings = load_settings(config_dir)
+    service = DataService(settings, source=build_source(settings, kind=source or None))
+
+    console.print(f"数据源：[cyan]{service.source.name}[/cyan]")
+    health = service.health()
+    if not health.ok:
+        console.print(f"[red]✗ 数据源不可用：{escape(health.message)}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        count = service.sync_instruments()
+        console.print(f"[green]✓[/green] 标的表 {count} 条")
+    except QuantStockError as exc:
+        # 标的表拉不到不该阻断行情初始化——core 档的标的池是内置的
+        console.print(f"[yellow]⚠ 标的表同步失败：{escape(str(exc))}[/yellow]")
+
+    universe = service.resolve_universe(tier)
+    report = service.update(universe, start=dt.date.fromisoformat(start) if start else None)
+    console.print(f"[green]✓[/green] {report.summary}")
+    if report.failures:
+        console.print(f"[yellow]⚠ 未取到数据：{escape('、'.join(report.failures[:10]))}[/yellow]")
+
+
+@data_app.command("update")
+def data_update(
+    config_dir: ConfigDirOption = Path("config"),
+    tier: Annotated[str, typer.Option("--tier", help="core / all")] = "core",
+    source: Annotated[str, typer.Option("--source", help="csv / baostock / akshare")] = "",
+) -> None:
+    """增量更新行情：从数据湖已有的最后一天接着拉。"""
+    settings = load_settings(config_dir)
+    service = DataService(settings, source=build_source(settings, kind=source or None))
+    report = service.update(service.resolve_universe(tier))
+    console.print(f"[green]✓[/green] {report.summary}")
+
+
+@data_app.command("status")
+def data_status(config_dir: ConfigDirOption = Path("config")) -> None:
+    """显示数据湖状态。"""
+    settings = load_settings(config_dir)
+    service = DataService(settings)
+    snapshot = service.status()
+
+    console.print(f"数据湖：{snapshot.root}")
+    console.print(snapshot.message)
+    health = service.health()
+    mark = "[green]✓[/green]" if health.ok else "[red]✗[/red]"
+    console.print(f"数据源 {health.name} {mark} {escape(health.message)}")
+    if not snapshot.is_ready:
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------- 建议
+@app.command()
+def advise(
+    config_dir: ConfigDirOption = Path("config"),
+    date: Annotated[str, typer.Option("--date", "-d", help="决策日 YYYY-MM-DD")] = "",
+    tier: Annotated[str, typer.Option("--tier", help="候选池档位 core / all")] = "core",
+    capital: Annotated[float, typer.Option("--capital", help="账户总资产，覆盖账本推导")] = 0.0,
+    explain: Annotated[str, typer.Option("--explain", help="只看某只标的的完整解释")] = "",
+    save: Annotated[bool, typer.Option("--save/--no-save", help="是否落盘")] = True,
+) -> None:
+    """生成今日操作建议（数据 → 因子 → 信号 → 组合 → 风控 → 四支柱解释）。"""
+    settings = load_settings(config_dir)
+    service = AdvisorService(settings)
+    trade_date = dt.date.fromisoformat(date) if date else today()
+
+    try:
+        result = service.advise(
+            as_of=trade_date,
+            tier=tier,
+            total_value=money(str(capital)) if capital > 0 else None,
+            save=save,
+        )
+    except QuantStockError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]✓[/green] {result.summary}")
+    if result.saved_to:
+        console.print(f"  已落盘 {result.saved_to}")
+    _render_plan(result.plan, only=explain or None)
+
+    for symbol, reason in result.skipped:
+        console.print(f"  [dim]跳过 {symbol}：{escape(reason)}[/dim]")
+
+
+# ---------------------------------------------------------------- 回测
+@app.command()
+def backtest(
+    config_dir: ConfigDirOption = Path("config"),
+    start: Annotated[str, typer.Option("--from", help="起始日 YYYY-MM-DD")] = "",
+    end: Annotated[str, typer.Option("--to", help="结束日 YYYY-MM-DD")] = "",
+    tier: Annotated[str, typer.Option("--tier", help="候选池档位 core / all")] = "core",
+    capital: Annotated[float, typer.Option("--capital", help="初始资金")] = 200000.0,
+    rebalance: Annotated[int, typer.Option("--rebalance", help="调仓间隔（交易日）")] = 5,
+    segment: Annotated[
+        str, typer.Option("--segment", help="train / validation / test。test 段只允许跑一次")
+    ] = "train",
+) -> None:
+    """在历史区间上回测每日建议逻辑（与实盘同一套打分与组合规则）。"""
+    settings = load_settings(config_dir)
+    service = BacktestService(settings)
+
+    if not start or not end:
+        console.print("[red]必须给出 --from 与 --to[/red]")
+        raise typer.Exit(1)
+
+    begin, finish = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    if segment == "test" and service.trials.test_segment_used("daily_advice"):
+        # 反复在同一测试集上调参，测试集就变成了第二个训练集
+        console.print("[red]✗ test 段已经用过了。测试集一次性使用，重跑请换一个时间段。[/red]")
+        raise typer.Exit(1)
+
+    try:
+        report = service.run(
+            start=begin,
+            end=finish,
+            tier=tier,
+            initial_cash=money(str(capital)),
+            rebalance_days=rebalance,
+            segment=segment,
+        )
+    except QuantStockError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print(f"[green]✓[/green] {escape(report.explain())}")
+
+    table = Table(show_header=True)
+    table.add_column("指标", style="cyan")
+    table.add_column("值", justify="right")
+    stats = report.stats
+    table.add_row("总收益", f"{stats.total_return:+.2%}")
+    table.add_row("年化收益", f"{stats.annualized_return:+.2%}")
+    table.add_row("年化波动", f"{stats.annualized_volatility:.2%}")
+    table.add_row("Sharpe", f"{stats.sharpe:.2f}")
+    table.add_row("Sortino", f"{stats.sortino:.2f}")
+    table.add_row("最大回撤", f"{stats.max_drawdown:.2%}")
+    table.add_row("胜率", f"{stats.win_rate:.1%}")
+    table.add_row("TWR（策略能力）", f"{stats.twr:+.2%}")
+    table.add_row("MWR（实际赚了多少）", f"{stats.mwr:+.2%}")
+    console.print(table)
+
+    for note in report.warnings():
+        console.print(f"[yellow]⚠ {escape(note)}[/yellow]")
+    console.print(f"[dim]试验已记入 {service.trials.path}（{report.trial_id}）[/dim]")
+    console.print(
+        "[dim]单次回测不是结论：进实盘候选池还需 DSR ≥ 0.95、PBO ≤ 0.5、参数高原通过[/dim]"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
