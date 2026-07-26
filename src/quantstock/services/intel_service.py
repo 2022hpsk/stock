@@ -29,8 +29,10 @@ from quantstock.intel.external import (
     parse_payload,
 )
 from quantstock.intel.pipeline import IntelPipeline, PipelineResult
-from quantstock.intel.protocols import SourceRegistry, discover_plugins, fetch_all
+from quantstock.intel.protocols import NewsSource, SourceRegistry, discover_plugins, fetch_all
 from quantstock.intel.scoring import ImportanceScorer
+from quantstock.intel.sources import ClsTelegraphSource, EastMoneySource, RssSource
+from quantstock.intel.sources.rss import RssFeed
 from quantstock.intel.store import IntelStore
 from quantstock.intel.types import IntelDigest, IntelDomain, IntelItem, SourceHealth
 
@@ -49,6 +51,14 @@ __all__ = [
 _log = get_logger(__name__)
 
 DEFAULT_LOOKBACK_DAYS = 7
+
+MAX_TRACKED_SYMBOLS = 50
+"""逐只查询个股新闻的标的上限。
+
+东方财富的个股新闻接口按标的逐个请求，礼貌抓取限速下（默认 30 次/分）
+一百只标的就要跑三分多钟。持仓加候选池超过这个数时截断并记警告——
+让采集慢到超时，比少查几只标的的新闻更糟。
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,8 +108,14 @@ class IntelService:
         self._holdings = tuple(holdings)
         self._watchlist = tuple(watchlist)
 
-        self._registry = registry or SourceRegistry(
-            discover_plugins(settings.config_dir.parent / "plugins" / "intel_sources")
+        # 必须是 `is None` 而不是 `or`：SourceRegistry 定义了 __len__，
+        # 空注册表是 falsy。用 `or` 会让"显式关掉所有情报源"被静默替换成
+        # 默认装配的联网源——测试里表现为莫名其妙地打真网，
+        # 生产上表现为用户关不掉情报采集
+        self._registry = (
+            registry
+            if registry is not None
+            else self._build_registry(settings, tracked=(*self._holdings, *self._watchlist))
         )
         self._blacklist = IntelBlacklist()
         self._blacklist.load(self._store.blacklist_path)
@@ -110,6 +126,41 @@ class IntelService:
             digest_builder=DigestBuilder(),
             blacklist=self._blacklist,
         )
+
+    @staticmethod
+    def _build_registry(settings: Settings, *, tracked: Sequence[Symbol] = ()) -> SourceRegistry:
+        """按配置装配情报源。
+
+        插件排在内置源之后注册——同名时用户的实现覆盖内置的，
+        这是插件机制该有的优先级。
+
+        Args:
+            settings: 运行期配置。
+            tracked: 要逐只跟踪个股新闻的标的（持仓 + 候选池）。
+                **不传就等于关掉了个股域的采集**——东方财富的个股新闻接口
+                是按标的逐个查的，没有标的它只会拉全球快讯。
+
+        Returns:
+            源注册表。
+        """
+        sources: list[NewsSource] = []
+        config = settings.config.intel
+        if config.enabled:
+            # 内置源只在 akshare 可用时才真正工作；不可用时它们的 fetch
+            # 返回空列表并记 WARNING，不阻断整体采集
+            symbols = tuple(dict.fromkeys(tracked))[:MAX_TRACKED_SYMBOLS]
+            if len(tracked) > len(symbols):
+                _log.warning(
+                    "intel_tracked_symbols_truncated",
+                    requested=len(tracked),
+                    kept=len(symbols),
+                )
+            sources.extend([ClsTelegraphSource(), EastMoneySource(symbols=symbols)])
+            if feeds := _rss_feeds(settings):
+                sources.append(RssSource(feeds))
+
+        sources.extend(discover_plugins(settings.config_dir.parent / "plugins" / "intel_sources"))
+        return SourceRegistry(sources)
 
     @property
     def store(self) -> IntelStore:
@@ -364,3 +415,47 @@ class IntelService:
     def inbox_dir(self) -> Path:
         """收件箱目录路径，供界面展示。"""
         return self._inbox.inbox_dir
+
+
+def _rss_feeds(settings: Settings) -> list[RssFeed]:
+    """读取用户声明的 RSS 订阅源。
+
+    文件不存在或格式非法都只记警告——RSS 是可选增强，
+    一个写坏的 YAML 不该让整个情报模块起不来。
+
+    Args:
+        settings: 运行期配置。
+
+    Returns:
+        订阅源列表。
+    """
+    path = settings.config_dir / "intel_sources.yaml"
+    if not path.exists():
+        return []
+
+    import yaml  # noqa: PLC0415 - 仅此处需要
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        _log.warning("intel_sources_yaml_invalid", path=str(path), error=str(exc))
+        return []
+
+    out: list[RssFeed] = []
+    for row in payload.get("rss", []):
+        if not isinstance(row, dict) or not row.get("url"):
+            continue
+        domain = IntelDomain.MARKET
+        raw_domain = str(row.get("domain", "")).strip().lower()
+        for member in IntelDomain:
+            if member.value == raw_domain:
+                domain = member
+                break
+        out.append(
+            RssFeed(
+                name=str(row.get("name") or row["url"]),
+                url=str(row["url"]),
+                domain=domain,
+            )
+        )
+    return out

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import SecretStr
 from typer.testing import CliRunner
 
 from quantstock.cli.main import app
@@ -22,7 +23,7 @@ from quantstock.config.settings import Secrets, Settings
 from quantstock.infra.clock import CST, FrozenClock, set_clock
 from quantstock.infra.errors import LLMError, LLMLiveCallInBacktestError
 from quantstock.llm.protocols import CompletionRequest, CompletionResponse
-from quantstock.services.llm_service import LLMService
+from quantstock.services.llm_service import LLMService, _build_provider
 from tests.unit.test_llm import GOOD_JUDGEMENT, MAOTAI, MATERIALS, StubProvider
 
 runner = CliRunner()
@@ -317,3 +318,28 @@ class TestProviderContract:
             {"text": "t", "model": "m", "input_tokens": "不是数字"}
         )
         assert restored.input_tokens == 0
+
+
+class TestProviderAssembly:
+    """默认供应商装配。
+
+    ``provider=None`` 是生产环境实际走的那条路，测试里到处注入假供应商
+    会让它一行都跑不到。
+    """
+
+    def test_no_key_means_no_provider(self, tmp_path: Path) -> None:
+        # 没配 key 时返回 None 而不是抛错：用户可能只是想先看看界面长什么样，
+        # 不该被一个可选功能挡在门外（红线 LR2：关掉 LLM 系统须完整可用）
+        assert _build_provider(make_settings(tmp_path)) is None
+
+    def test_blank_key_means_no_provider(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path)
+        settings.secrets.anthropic_api_key = SecretStr("   ")
+        assert _build_provider(settings) is None
+
+    def test_key_yields_anthropic_provider(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path)
+        settings.secrets.anthropic_api_key = SecretStr("sk-ant-test")
+        provider = _build_provider(settings)
+        assert provider is not None
+        assert provider.name == "anthropic"

@@ -139,6 +139,7 @@ files = ["src", "tests"]
 [[tool.mypy.overrides]]
 module = [
     "akshare.*",
+    "anthropic.*",
     "baostock.*",
     "tushare.*",
     "feedparser.*",

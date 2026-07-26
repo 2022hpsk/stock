@@ -22,6 +22,7 @@ from quantstock.llm.client import LLMClient, LLMMode, TaskCall
 from quantstock.llm.influence import HARD_INFLUENCE_CAP
 from quantstock.llm.prompts import PROMPT_VERSION
 from quantstock.llm.protocols import LLMProvider
+from quantstock.llm.providers import AnthropicProvider
 from quantstock.llm.schemas import PositionJudgement
 from quantstock.llm.tasks import (
     ExplainTask,
@@ -103,7 +104,7 @@ class LLMService:
         )
         self._client = LLMClient(
             mode=mode,
-            provider=provider,
+            provider=provider if provider is not None else _build_provider(settings),
             cache_dir=settings.var_dir / "llm_cache",
             temperature=config.temperature,
             rate_limit_per_min=config.rate_limit_per_min,
@@ -286,3 +287,26 @@ class LLMService:
             "llm_model_main": self._config.model_main,
             "llm_model_fast": self._config.model_fast,
         }
+
+
+def _build_provider(settings: Settings) -> LLMProvider | None:
+    """按密钥装配供应商。
+
+    没配 key 时返回 None——``LLMClient`` 会把每次调用降级为"未配置供应商"，
+    系统照常走纯量化路径。这比在启动时抛错好：用户可能只是想先看看
+    界面长什么样，不该被一个可选功能挡在门外。
+
+    Args:
+        settings: 运行期配置。
+
+    Returns:
+        供应商；未配置密钥时 None。
+    """
+    secret = settings.secrets.anthropic_api_key
+    if secret is None or not secret.get_secret_value().strip():
+        return None
+    try:
+        return AnthropicProvider(secret.get_secret_value())
+    except LLMError as exc:
+        _log.warning("llm_provider_unavailable", error=str(exc))
+        return None

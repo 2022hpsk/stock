@@ -24,8 +24,13 @@ from quantstock.infra.clock import FrozenClock, set_clock
 from quantstock.infra.types import Symbol
 from quantstock.intel.entity import SymbolDictionary
 from quantstock.intel.protocols import NewsSource, SourceRegistry
+from quantstock.intel.sources.akshare_feeds import EastMoneySource
 from quantstock.intel.types import EventType, IntelDomain, IntelItem, SourceHealth, SourceTier
-from quantstock.services.intel_service import IntelService
+from quantstock.services.intel_service import (
+    MAX_TRACKED_SYMBOLS,
+    IntelService,
+    _rss_feeds,
+)
 from tests.unit.test_intel import CATL, MAOTAI, NOW, item
 
 runner = CliRunner()
@@ -264,8 +269,13 @@ class TestIntelCli:
     def workspace(self, tmp_path: Path) -> Path:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
+        # 关掉情报模块，让内置的联网源不被装配。CLI 用例验的是命令接线，
+        # 不是源的可用性；留着默认装配就会在测试里真的去请求外网
         (config_dir / "base.yaml").write_text(
-            yaml.safe_dump({"app": {"var_dir": str(tmp_path / "var")}}, allow_unicode=True),
+            yaml.safe_dump(
+                {"app": {"var_dir": str(tmp_path / "var")}, "intel": {"enabled": False}},
+                allow_unicode=True,
+            ),
             encoding="utf-8",
         )
         return config_dir
@@ -418,3 +428,78 @@ class TestIngestRunsThePipeline:
         note = service.note("央行宣布降准", domain="policy")
         assert note.domain_declared
         assert service.ingest([note]).items[0].domain is IntelDomain.POLICY
+
+
+class TestRegistryAssembly:
+    """默认源装配。
+
+    ``registry=None`` 是**生产环境实际走的那条路**——CLI 与 web 都不显式传
+    注册表。测试里到处显式注入假源，会让这条路一行都跑不到。
+    """
+
+    def test_builtin_sources_registered_when_enabled(self, tmp_path: Path) -> None:
+        registry = IntelService._build_registry(make_settings(tmp_path))
+        assert {"cls", "eastmoney"} <= {s.name for s in registry.all()}
+
+    def test_disabled_intel_registers_nothing(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path)
+        settings.config.intel.enabled = False
+        assert len(IntelService._build_registry(settings)) == 0
+
+    def test_tracked_symbols_reach_the_per_stock_source(self, tmp_path: Path) -> None:
+        # 不传标的等于关掉了个股域采集：东方财富的个股新闻接口按标的逐个查，
+        # 没有标的它只会拉全球快讯
+        service = IntelService(make_settings(tmp_path), holdings=[MAOTAI], watchlist=[CATL, MAOTAI])
+        eastmoney = next(s for s in service.registry.all() if isinstance(s, EastMoneySource))
+        assert eastmoney.symbols == (MAOTAI, CATL)
+
+    def test_tracked_symbols_are_capped(self, tmp_path: Path) -> None:
+        # 逐只查询在限速下是线性耗时，一百只要跑三分多钟。截断比超时好
+        many = [Symbol(f"{600000 + i}.SH") for i in range(MAX_TRACKED_SYMBOLS + 20)]
+        registry = IntelService._build_registry(make_settings(tmp_path), tracked=many)
+        eastmoney = next(s for s in registry.all() if isinstance(s, EastMoneySource))
+        assert len(eastmoney.symbols) == MAX_TRACKED_SYMBOLS
+
+    def test_rss_feeds_declared_in_yaml_are_registered(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path)
+        settings.config_dir.mkdir(parents=True, exist_ok=True)
+        (settings.config_dir / "intel_sources.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "rss": [
+                        {"name": "gov", "url": "https://example.com/gov.xml", "domain": "policy"},
+                        {"name": "mkt", "url": "https://example.com/mkt.xml"},
+                    ]
+                },
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+
+        feeds = _rss_feeds(settings)
+
+        assert [f.name for f in feeds] == ["gov", "mkt"]
+        assert feeds[0].domain is IntelDomain.POLICY
+        assert feeds[1].domain is IntelDomain.MARKET
+
+    def test_missing_yaml_is_not_an_error(self, tmp_path: Path) -> None:
+        assert _rss_feeds(make_settings(tmp_path)) == []
+
+    def test_broken_yaml_degrades_instead_of_crashing(self, tmp_path: Path) -> None:
+        # RSS 是可选增强，一个写坏的 YAML 不该让整个情报模块起不来
+        settings = make_settings(tmp_path)
+        settings.config_dir.mkdir(parents=True, exist_ok=True)
+        (settings.config_dir / "intel_sources.yaml").write_text(
+            "rss: [ {name: a, url: 'https://a'\n", encoding="utf-8"
+        )
+
+        assert _rss_feeds(settings) == []
+
+    def test_rows_without_url_are_skipped(self, tmp_path: Path) -> None:
+        settings = make_settings(tmp_path)
+        settings.config_dir.mkdir(parents=True, exist_ok=True)
+        (settings.config_dir / "intel_sources.yaml").write_text(
+            yaml.safe_dump({"rss": [{"name": "no-url"}, "not-a-dict"]}), encoding="utf-8"
+        )
+
+        assert _rss_feeds(settings) == []

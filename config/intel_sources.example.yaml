@@ -1,0 +1,43 @@
+# 复制为 config/intel_sources.yaml 后按需增删。
+#
+# 这里声明的是**通用 RSS/Atom 订阅源**。内置的财联社电报与东方财富新闻
+# 无需声明，情报模块开启时自动注册（config/intel.yaml 里的 enabled）。
+#
+# 为什么单独给 RSS 一个入口：RSS 是稳定了二十年的标准，比各家网站的私有
+# 接口耐用得多。想跟哪个信息源，加一行 url 就行，不用写适配器代码。
+#
+# 三个字段的含义：
+#   name    仅用于日志与来源标识，取一个自己认得出的短名即可；
+#   url     订阅地址；
+#   domain  情报域，决定这条消息进日报的哪一段：
+#           macro（宏观）/ policy（政策）/ industry（行业）/
+#           company（公司）/ market（市场情绪）/ risk（风险）。
+#           不写默认 market。
+#
+# 两个必须知道的行为：
+#
+# 1. **没有发布时间的条目会被直接丢弃**，不会用抓取时刻顶替。用抓取时间
+#    冒充发布时间等于把未来消息塞进过去，在回测里会静默制造未来函数
+#    （红线 I-R5）。少一条情报远好过一条时间错乱的情报。
+# 2. **单个源挂掉只丢它自己**，其余照常。情报是增强项不是前置条件——
+#    一个订阅源被限流，不该让当天一条建议都出不来。
+#
+# 抓取频率受礼貌限速约束（默认 30 次/分，红线 I-R6）。订阅源列得越多，
+# 一次 `quantstock intel fetch` 越慢，按实际需要来。
+
+rss:
+  # ---- 官方与监管（tier 会被标为 media，正式公告仍以交易所渠道为准）----
+  - name: 证监会要闻
+    url: http://www.csrc.gov.cn/pub/newsite/rss/xwdd.xml
+    domain: policy
+
+  # ---- 宏观 ----
+  - name: 统计局最新发布
+    url: http://www.stats.gov.cn/sj/zxfb/rss.xml
+    domain: macro
+
+  # ---- 市场 ----
+  # 示例地址，按自己常看的站点替换
+  - name: 示例财经媒体
+    url: https://example.com/finance/rss.xml
+    domain: market
