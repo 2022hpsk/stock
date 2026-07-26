@@ -32,6 +32,8 @@ from quantstock.web.routers import (
     execution_router,
     intel_router,
     llm_router,
+    review_router,
+    risk_router,
 )
 
 __all__ = ["create_app"]
@@ -128,6 +130,8 @@ def create_app(
         execution_router,
         intel_router,
         backtest_router,
+        risk_router,
+        review_router,
         llm_router,
     ):
         app.include_router(router)

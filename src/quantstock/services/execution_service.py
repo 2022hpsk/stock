@@ -30,6 +30,7 @@ from quantstock.execution.executor import (
     ExecutionRequest,
     Executor,
 )
+from quantstock.execution.report_store import ExecutionReportStore
 from quantstock.execution.types import DriftCheck, ExecutionReport, OrderBook, SkipReason
 from quantstock.infra.errors import ConfigError
 from quantstock.infra.logging import get_logger
@@ -106,6 +107,7 @@ class ExecutionService:
         self._halt = HaltSwitch(settings.var_dir)
         self._broker = self._build_broker(settings)
         self._store = PlanStore(settings.var_dir / "plans")
+        self._reports = ExecutionReportStore(settings.var_dir / "executions")
         self._executor = Executor(
             broker=self._broker,
             halt_switch=self._halt,
@@ -117,6 +119,11 @@ class ExecutionService:
     def store(self) -> PlanStore:
         """计划仓库。"""
         return self._store
+
+    @property
+    def reports(self) -> ExecutionReportStore:
+        """执行报告仓库。复盘与审计都从这里读。"""
+        return self._reports
 
     @property
     def broker_name(self) -> str:
@@ -260,6 +267,9 @@ class ExecutionService:
         # 确认发生在执行之前，但记录放在这里：先让执行器把"必须显式 --live"
         # 之类的前置错误抛出来，避免为一次根本没发生的执行留下确认痕迹。
         self._store.mark_confirmed(plan, confirmed_by=confirmed_by)
+        # 报告必须落盘，否则一退出进程就没了——"计划 8 笔、执行 5 笔、
+        # 跳过的 3 笔各是什么原因"这类问题，事后就再也答不上来（docs/08 D3）
+        self._reports.append(report)
         _log.info(
             "execution_service_done",
             plan_id=plan.plan_id,

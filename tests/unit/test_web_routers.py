@@ -374,3 +374,80 @@ class TestAccountEndpoints:
 
     def test_writes_rejected_in_readonly(self, readonly_client: TestClient) -> None:
         assert readonly_client.post("/api/account/deposit", json={"amount": "1"}).status_code == 403
+
+
+class TestRiskEndpoints:
+    """P10 风控页的接口。"""
+
+    def test_rules_are_listed(self, client: TestClient) -> None:
+        body = client.get("/api/risk/rules").json()
+        assert body["count"] > 0
+        ids = {r["rule_id"] for r in body["rules"]}
+        assert {"A01", "A02", "A10", "B01"} <= ids
+
+    def test_no_a_class_rule_is_closable(self, client: TestClient) -> None:
+        # 验收 5：A 类风控规则在界面上无任何关闭入口。
+        # 这条断言让"不可关闭"从文档里的一句话，变成会失败的约束
+        rules = client.get("/api/risk/rules").json()["rules"]
+        a_class = [r for r in rules if r["rule_class"] == "A"]
+        assert a_class, "A 类规则不该为空"
+        assert all(not r["closable"] for r in a_class)
+
+    def test_a_class_thresholds_are_not_editable_from_ui(self, client: TestClient) -> None:
+        # 让界面能改绝对硬闸，等于给风控开了个后门
+        rules = client.get("/api/risk/rules").json()["rules"]
+        assert all(not r["threshold_editable"] for r in rules if r["rule_class"] == "A")
+
+    def test_b_class_rules_are_not_closable_either(self, client: TestClient) -> None:
+        # B 类阈值可配，但规则本身不可关闭
+        rules = client.get("/api/risk/rules").json()["rules"]
+        assert all(not r["closable"] for r in rules if r["rule_class"] == "B")
+
+    def test_hard_limits_are_not_auto_derived(self, client: TestClient) -> None:
+        # 自动推导会被同一个错误数据污染，失去防护意义
+        assert client.get("/api/risk/hard-limits").json()["auto_derived"] is False
+
+    def test_circuit_reports_distance_not_only_state(self, client: TestClient) -> None:
+        # 状态只有到了才变，距离能让人提前看到自己正在往哪走
+        body = client.get("/api/risk/circuit", params={"daily_return": -0.02}).json()
+        assert body["daily_loss"]["current"] == pytest.approx(0.02)
+        assert body["daily_loss"]["watch"] > 0
+        assert body["daily_loss"]["halted"] > body["daily_loss"]["watch"]
+
+    def test_halted_does_not_auto_recover(self, client: TestClient) -> None:
+        # 自动恢复会让系统在剧烈波动中反复进出，而那正是最该停手的时候
+        assert client.get("/api/risk/circuit").json()["auto_recovers"] is False
+
+    def test_risk_page_has_no_write_endpoints(self, client: TestClient) -> None:
+        # 改阈值必须走配置页：那条路径有校验、Diff、备份与审计
+        verbs = {
+            verb
+            for route in client.app.routes  # type: ignore[attr-defined]
+            for verb in getattr(route, "methods", set())
+            if str(getattr(route, "path", "")).startswith("/api/risk")
+        }
+        assert verbs <= {"GET", "HEAD", "OPTIONS"}
+
+
+class TestReviewEndpoints:
+    """P12 复盘页的接口。"""
+
+    def test_empty_history_is_reported_not_crashed(self, client: TestClient) -> None:
+        body = client.get("/api/review/summary").json()
+        assert body["plans"] == 0
+        assert body["deviations"] == []
+        assert "无从复盘" in body["explain"]
+
+    def test_dates_start_empty(self, client: TestClient) -> None:
+        assert client.get("/api/review/dates").json()["dates"] == []
+
+    def test_missing_day_is_reported_not_404(self, client: TestClient) -> None:
+        body = client.get("/api/review/deviation/2026-07-24").json()
+        assert body["available"] is False
+
+    def test_sample_sufficiency_is_always_reported(self, client: TestClient) -> None:
+        # 样本不够时算出的胜率是噪声，但读起来很像信号。
+        # 所以界面必须能知道该不该信这个数字
+        body = client.get("/api/review/summary").json()
+        assert body["has_enough_samples"] is False
+        assert "unpriced_skips" in body

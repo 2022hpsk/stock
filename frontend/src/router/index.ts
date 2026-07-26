@@ -13,7 +13,9 @@ export const routes = [
   { path: '/execution', name: 'execution', component: () => import('@/views/ExecutionView.vue'), meta: { title: '执行', icon: 'P3' } },
   { path: '/data', name: 'data', component: () => import('@/views/DataView.vue'), meta: { title: '数据', icon: 'P4' } },
   { path: '/intel', name: 'intel', component: () => import('@/views/IntelView.vue'), meta: { title: '情报', icon: 'P5' } },
+  { path: '/risk', name: 'risk', component: () => import('@/views/RiskView.vue'), meta: { title: '风控', icon: 'P10' } },
   { path: '/backtest', name: 'backtest', component: () => import('@/views/BacktestView.vue'), meta: { title: '回测', icon: 'P8' } },
+  { path: '/review', name: 'review', component: () => import('@/views/ReviewView.vue'), meta: { title: '复盘', icon: 'P12' } },
   { path: '/llm', name: 'llm', component: () => import('@/views/LlmView.vue'), meta: { title: '大模型', icon: 'P16' } },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '配置', icon: 'P13' } },
 ]

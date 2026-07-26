@@ -24,6 +24,8 @@ from quantstock.services.data_service import DataService
 from quantstock.services.execution_service import ExecutionService
 from quantstock.services.intel_service import IntelService
 from quantstock.services.llm_service import LLMService
+from quantstock.services.review_service import ReviewService
+from quantstock.services.risk_service import RiskService
 from quantstock.services.system_service import SystemService
 from quantstock.web.events import EventHub
 
@@ -63,6 +65,8 @@ class AppState:
         self._intel: IntelService | None = None
         self._llm: LLMService | None = None
         self._backtest: BacktestService | None = None
+        self._risk: RiskService | None = None
+        self._review: ReviewService | None = None
 
     @property
     def account(self) -> AccountService:
@@ -112,6 +116,20 @@ class AppState:
         if self._backtest is None:
             self._backtest = BacktestService(self.settings, data=self.data)
         return self._backtest
+
+    @property
+    def risk(self) -> RiskService:
+        """风控服务。"""
+        if self._risk is None:
+            self._risk = RiskService(self.settings)
+        return self._risk
+
+    @property
+    def review(self) -> ReviewService:
+        """复盘服务。"""
+        if self._review is None:
+            self._review = ReviewService(self.settings, data=self.data)
+        return self._review
 
 
 def get_state(request: Request) -> AppState:

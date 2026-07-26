@@ -14,6 +14,8 @@ from quantstock.web.routers.data import router as data_router
 from quantstock.web.routers.execution import router as execution_router
 from quantstock.web.routers.intel import router as intel_router
 from quantstock.web.routers.llm import router as llm_router
+from quantstock.web.routers.review import router as review_router
+from quantstock.web.routers.risk import router as risk_router
 
 __all__ = [
     "account_router",
@@ -23,4 +25,6 @@ __all__ = [
     "execution_router",
     "intel_router",
     "llm_router",
+    "review_router",
+    "risk_router",
 ]

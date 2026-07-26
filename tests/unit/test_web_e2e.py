@@ -273,3 +273,82 @@ class TestEventsDuringJourney:
         kinds = [e.kind for e in hub.replay(frozenset({"tasks"}), since=before)]
         assert "progress" in kinds
         assert "done" in kinds
+
+
+class TestExecutionFeedsReview:
+    """执行 → 复盘的闭环。
+
+    **这是执行报告落盘的目的**。报告此前只存在于一次调用的返回值里，
+    进程一退就没了——于是"计划 8 笔、执行 5 笔、跳过的 3 笔各是什么原因"
+    这类问题事后完全无法回答，而这正是半自动系统里最值得回答的一类。
+    """
+
+    def _execute(self, client: TestClient, plan: dict[str, Any], *, accept: bool) -> dict[str, Any]:
+        """执行一份计划。
+
+        Args:
+            client: 测试客户端。
+            plan: 建议响应。
+            accept: 全部接受还是全部跳过。
+
+        Returns:
+            执行报告。
+        """
+        p = plan["plan"]
+        body: dict[str, Any] = client.post(
+            "/api/execution/execute",
+            json={
+                "trade_date": p["trade_date"],
+                "plan_id": p["plan_id"],
+                "prices": {i["symbol"]: i["price_high"] for i in p["intents"]},
+                "decisions": [
+                    {
+                        "intent_id": i["intent_id"],
+                        "accepted": accept,
+                        "skip_reason": None if accept else "bad_timing",
+                    }
+                    for i in p["intents"]
+                ],
+            },
+        ).json()
+        return body
+
+    def test_execution_shows_up_in_review(self, client: TestClient, plan: dict[str, Any]) -> None:
+        if not plan["plan"]["intents"]:
+            pytest.skip("本次未产生建议")
+
+        assert client.get("/api/review/dates").json()["dates"] == []
+        self._execute(client, plan, accept=True)
+
+        dates = client.get("/api/review/dates").json()["dates"]
+        assert plan["plan"]["trade_date"] in dates
+
+        deviation = client.get(f"/api/review/deviation/{plan['plan']['trade_date']}").json()
+        assert deviation["available"] is True
+        assert deviation["planned"] == len(plan["plan"]["intents"])
+
+    def test_skip_reasons_survive_to_review(self, client: TestClient, plan: dict[str, Any]) -> None:
+        # 跳过原因是复盘的原料。只存成交记录的话，
+        # "人工干预到底是帮忙还是添乱"永远算不出来
+        if not plan["plan"]["intents"]:
+            pytest.skip("本次未产生建议")
+
+        self._execute(client, plan, accept=False)
+
+        deviation = client.get(f"/api/review/deviation/{plan['plan']['trade_date']}").json()
+        assert deviation["skipped"] == len(plan["plan"]["intents"])
+        assert deviation["by_reason"].get("bad_timing") == len(plan["plan"]["intents"])
+
+    def test_review_summary_counts_the_execution(
+        self, client: TestClient, plan: dict[str, Any]
+    ) -> None:
+        if not plan["plan"]["intents"]:
+            pytest.skip("本次未产生建议")
+
+        self._execute(client, plan, accept=True)
+        summary = client.get("/api/review/summary").json()
+
+        assert summary["plans"] == 1
+        assert summary["total_executed"] > 0
+        # 样本远不足十次，必须仍然拒绝给结论
+        assert summary["has_enough_samples"] is False
