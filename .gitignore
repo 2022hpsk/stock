@@ -21,8 +21,13 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
-build/
-dist/
+/build/
+/dist/
+
+# 前端依赖与中间产物。构建结果 src/quantstock/web/dist/ **要入库**：
+# 规格要求终端用户 uv sync 后直接 quantstock ui 即可，不需要 Node 环境。
+frontend/node_modules/
+frontend/.vite/
 .venv/
 venv/
 

@@ -1,10 +1,11 @@
-.PHONY: help install fmt lint type test check arch secrets clean ui ui-dev ui-build
+.PHONY: help install fmt lint type test check arch secrets clean ui ui-dev ui-build ui-check
 
 help:
 	@echo "install  安装依赖（uv sync）"
 	@echo "ui       启动本地可视化界面 http://127.0.0.1:8686"
 	@echo "ui-dev   前端开发模式（Vite 热更新，需 Node）"
-	@echo "ui-build 构建前端产物到 src/quantstock/web/static/"
+	@echo "ui-build 构建前端产物到 src/quantstock/web/dist/（随包分发）"
+	@echo "ui-check 前端类型检查（vue-tsc）"
 	@echo "fmt      格式化代码"
 	@echo "lint     ruff 静态检查"
 	@echo "type     mypy 严格类型检查"
@@ -24,6 +25,9 @@ ui-dev:
 
 ui-build:
 	cd frontend && npm install && npm run build
+
+ui-check:
+	cd frontend && npm install && npm run typecheck
 
 fmt:
 	uv run ruff format src tests

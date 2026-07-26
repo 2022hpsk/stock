@@ -28,7 +28,7 @@ from quantstock.backtest.engine import (
     StrategyFn,
 )
 from quantstock.backtest.metrics import PerformanceStats
-from quantstock.backtest.trials import Trial, TrialLog
+from quantstock.backtest.trials import AdmissionVerdict, Trial, TrialLog, admission_check
 from quantstock.config.settings import Settings
 from quantstock.infra.clock import now
 from quantstock.infra.errors import DataError
@@ -52,7 +52,9 @@ from quantstock.strategy.builtin import (
 )
 from quantstock.strategy.types import Strategy, StrategyContext
 
-__all__ = ["BacktestReport", "BacktestService"]
+# 界面与 CLI 是"薄"客户端，只允许依赖 services（F20.1 分层契约）。
+# 过拟合防线的契约类型在这里转出，客户端不必、也不允许直接 import backtest 层。
+__all__ = ["AdmissionVerdict", "BacktestReport", "BacktestService", "Trial"]
 
 _log = get_logger(__name__)
 
@@ -350,6 +352,42 @@ class BacktestService:
         )
         self._trials.append(trial)
         return trial.trial_id
+
+    def trial_records(
+        self, strategy: str = "daily_advice", *, segment: str | None = None
+    ) -> list[Trial]:
+        """取某策略的试验记录。
+
+        Args:
+            strategy: 策略名。
+            segment: 数据段；None 表示全部。
+
+        Returns:
+            试验记录，按写入顺序。
+
+        """
+        return self._trials.for_strategy(strategy, segment=segment)
+
+    def admission(self, strategy: str = "daily_advice") -> AdmissionVerdict:
+        """实盘候选池准入检查（A5 强制门槛）。
+
+        **必须喂全部试验记录**，包括失败的。只留最优结果会让 DSR 系统性偏乐观，
+        而 DSR 正是用来判断"这个结果是真的好还是试出来的"。
+
+        本方法刻意不接受"只看某几次试验"的参数——那等于把删掉失败尝试
+        做成了一个功能。
+
+        Args:
+            strategy: 策略名。
+
+        Returns:
+            准入结论。DSR < 0.95 或 PBO > 0.5 时 ``admitted`` 为 False，
+            且 ``reasons`` 说明具体是哪一项没过。
+
+        Raises:
+            StrategyError: 没有任何试验记录。
+        """
+        return admission_check(self._trials.for_strategy(strategy))
 
     def advisor(self) -> AdvisorService:
         """构造一个**回测模式**的建议服务。

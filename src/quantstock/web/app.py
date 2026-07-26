@@ -12,9 +12,9 @@ import secrets as secrets_mod
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -22,102 +22,28 @@ from pydantic import BaseModel, Field
 from quantstock.config.settings import Settings, load_settings
 from quantstock.infra.errors import QuantStockError
 from quantstock.infra.logging import get_logger
-from quantstock.services.config_service import ConfigService
-from quantstock.services.system_service import SystemService
+from quantstock.web.deps import AppState, AuthDep, StateDep, WriteDep
+from quantstock.web.events import parse_channels
+from quantstock.web.routers import (
+    advisor_router,
+    backtest_router,
+    data_router,
+    execution_router,
+    intel_router,
+    llm_router,
+)
 
 __all__ = ["create_app"]
 
 _log = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+DIST_DIR = Path(__file__).parent / "dist"
+"""Vue 构建产物。发版时预编译并随包分发，用户不需要 Node 环境。
 
-
-class AppState:
-    """应用级共享状态。
-
-    Attributes:
-        settings: 运行期配置。
-        access_token: 本地访问口令。首次启动随机生成并打印到终端。
-        readonly: 只读模式，所有写操作被拒绝。
-    """
-
-    def __init__(self, settings: Settings, *, readonly: bool = False) -> None:
-        """初始化。
-
-        Args:
-            settings: 运行期配置。
-            readonly: 是否只读模式。
-        """
-        self.settings = settings
-        self.readonly = readonly
-        self.access_token = secrets_mod.token_urlsafe(16)
-        self.config_service = ConfigService(settings.config_dir, settings.var_dir)
-        self.system_service = SystemService(settings)
-
-
-def _get_state(request: Request) -> AppState:
-    """从请求取应用状态。
-
-    Args:
-        request: 当前请求。
-
-    Returns:
-        应用状态。
-    """
-    state: AppState = request.app.state.app_state
-    return state
-
-
-StateDep = Annotated[AppState, Depends(_get_state)]
-
-
-def _require_token(
-    state: StateDep,
-    x_access_token: Annotated[str | None, Header(alias="X-Access-Token")] = None,
-) -> AppState:
-    """校验访问口令。
-
-    界面成为下单入口后必须加认证——即使只监听回环地址，
-    同机的其它程序也能访问（见 docs/09-可视化界面规格.md 第五节）。
-
-    Args:
-        state: 应用状态。
-        x_access_token: 请求头中的口令。
-
-    Returns:
-        应用状态。
-
-    Raises:
-        HTTPException: 口令缺失或错误。
-    """
-    if not x_access_token or not secrets_mod.compare_digest(x_access_token, state.access_token):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="访问口令无效")
-    return state
-
-
-AuthDep = Annotated[AppState, Depends(_require_token)]
-
-
-def _require_writable(state: AuthDep) -> AppState:
-    """校验当前允许写操作。
-
-    Args:
-        state: 已认证的应用状态。
-
-    Returns:
-        应用状态。
-
-    Raises:
-        HTTPException: 处于只读模式。
-    """
-    if state.readonly:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="当前为只读模式，写操作已禁用"
-        )
-    return state
-
-
-WriteDep = Annotated[AppState, Depends(_require_writable)]
+存在时优先于 ``static/``——后者是无构建工具时的降级页面，
+保证从源码直接运行（还没跑过 ``make ui-build``）时界面也不是白屏。
+"""
 
 
 # --------------------------------------------------------------------- 请求体
@@ -193,16 +119,111 @@ def create_app(
         )
 
     _register_routes(app)
+    _register_websocket(app)
+    for router in (
+        data_router,
+        advisor_router,
+        execution_router,
+        intel_router,
+        backtest_router,
+        llm_router,
+    ):
+        app.include_router(router)
 
-    if STATIC_DIR.exists():
-        app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
-
-        @app.get("/", include_in_schema=False)
-        async def _index() -> FileResponse:
-            """返回单页应用入口。"""
-            return FileResponse(STATIC_DIR / "index.html")
-
+    _mount_frontend(app)
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """挂载前端。
+
+    Vue 构建产物优先；没构建过时回退到无依赖的静态页，
+    这样"刚 clone 完就 quantstock ui"不会是一片白屏。
+
+    Args:
+        app: FastAPI 应用。
+    """
+    root = DIST_DIR if (DIST_DIR / "index.html").exists() else STATIC_DIR
+    if not (root / "index.html").exists():
+        return
+
+    if (root / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=root / "assets"), name="assets")
+    elif root == STATIC_DIR:
+        app.mount("/assets", StaticFiles(directory=root), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def _index() -> FileResponse:
+        """返回单页应用入口。"""
+        return FileResponse(root / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def _spa_fallback(path: str) -> FileResponse:
+        """前端路由回退。
+
+        Vue Router 用的是 history 模式，直接刷新 ``/advisor`` 时浏览器会向
+        后端请求这个路径。没有这个回退就是 404——用户刷新一次页面就"打不开了"。
+
+        Args:
+            path: 请求路径。
+
+        Returns:
+            静态文件或单页入口。
+
+        Raises:
+            HTTPException: 未知的 API 路径。
+        """
+        # API 路径必须落回 404，不能被单页入口吞掉。否则拼错的接口名会返回
+        # 一段 HTML 而状态码是 200，前端 response.json() 抛出的
+        # "Unexpected token <" 跟真正的问题毫无关系，极难定位
+        if path.startswith(("api/", "ws")):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"未知路径 /{path}")
+        candidate = root / path
+        if path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(root / "index.html")
+
+
+def _register_websocket(app: FastAPI) -> None:
+    """注册 WebSocket 推送端点。
+
+    Args:
+        app: FastAPI 应用。
+    """
+
+    @app.websocket("/ws")
+    async def events(websocket: WebSocket) -> None:
+        """事件推送。
+
+        查询参数：
+        - ``token``：访问口令。WebSocket 不走 HTTP 头，只能放查询串；
+        - ``channels``：逗号分隔的频道，缺省全订阅；
+        - ``since``：客户端已收到的最大序号，用于断线补齐。
+        """
+        state: AppState = websocket.app.state.app_state
+        token = websocket.query_params.get("token", "")
+        if not token or not secrets_mod.compare_digest(token, state.access_token):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="访问口令无效")
+            return
+
+        channels = parse_channels(websocket.query_params.get("channels"))
+        since = int(websocket.query_params.get("since") or 0)
+        await websocket.accept()
+
+        async with state.events.subscribe(channels) as sub:
+            # 先补断线期间错过的，再进入实时推送。顺序反过来会让补发的旧事件
+            # 盖住刚到的新事件，进度条会往回跳
+            for missed in state.events.replay(channels, since=since):
+                await websocket.send_json(missed.to_dict())
+            await websocket.send_json(
+                {"kind": "ready", "channels": sorted(channels), "seq": state.events.last_seq}
+            )
+            try:
+                while True:
+                    event = await sub.queue.get()
+                    await websocket.send_json(event.to_dict())
+            except WebSocketDisconnect:
+                _log.info("ws_disconnected")
 
 
 def _register_routes(app: FastAPI) -> None:  # noqa: C901 - 路由注册是平铺的声明，拆分反而更难看

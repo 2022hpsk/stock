@@ -1,0 +1,136 @@
+/*
+ * 全局样式。
+ *
+ * 涨跌颜色遵循 **A 股习惯：红涨绿跌**（docs/09 第七节）。这不是审美偏好——
+ * 用国际习惯（绿涨红跌）会让中文用户在扫一眼时把盈利读成亏损，
+ * 而看盘最频繁的动作恰恰就是"扫一眼"。
+ */
+
+:root {
+  --qs-up: #e5484d;
+  --qs-down: #30a46c;
+  --qs-flat: #8b8d98;
+  --qs-bg: #f6f7f9;
+  --qs-panel: #ffffff;
+  --qs-border: #e3e5e8;
+  --qs-text: #1c1f23;
+  --qs-muted: #6b7280;
+}
+
+html[data-color-scheme='international'] {
+  --qs-up: #30a46c;
+  --qs-down: #e5484d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--qs-bg);
+  color: var(--qs-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
+    Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.qs-up {
+  color: var(--qs-up);
+}
+.qs-down {
+  color: var(--qs-down);
+}
+.qs-flat {
+  color: var(--qs-flat);
+}
+
+.qs-page {
+  padding: 16px 20px 40px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.qs-page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.qs-page-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.qs-page-header .qs-sub {
+  color: var(--qs-muted);
+  font-size: 13px;
+}
+
+.qs-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.qs-card {
+  background: var(--qs-panel);
+  border: 1px solid var(--qs-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.qs-card .qs-label {
+  color: var(--qs-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.qs-card .qs-value {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.qs-mono {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.qs-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--qs-muted);
+}
+
+/* 四支柱展开区 */
+.qs-pillar {
+  margin-bottom: 14px;
+}
+
+.qs-pillar h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--qs-muted);
+  font-weight: 600;
+}
+
+.qs-pillar ul {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.8;
+}
+
+/* 支柱④ 反面证据。刻意给它一个显眼的底色：
+   只展示看多理由的界面会系统性地助长确认偏误 */
+.qs-counter {
+  background: #fff8f0;
+  border-left: 3px solid #f5a623;
+  padding: 8px 12px;
+  border-radius: 0 4px 4px 0;
+}
