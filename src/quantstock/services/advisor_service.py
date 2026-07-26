@@ -50,6 +50,7 @@ from quantstock.infra.money import money
 from quantstock.infra.types import Money, Symbol, TradeDate
 from quantstock.portfolio.builder import PortfolioConstraints, build_targets, diff_to_orders
 from quantstock.risk.engine import MarketSnapshot, RiskEngine
+from quantstock.services.account_service import AccountService
 from quantstock.services.data_service import DataService
 from quantstock.services.intel_service import IntelService
 from quantstock.services.llm_service import LLMService
@@ -142,13 +143,18 @@ class AdvisorService:
             data: 数据服务。
             intel: 情报服务。
             llm: 大模型服务。默认按配置构造（默认关闭）。
-            ledger: 账本。None 表示空账户（冷启动）。
+            ledger: 账本。None 表示**从流水重放**，没有流水时才是冷启动。
+
+                这里曾经是个真实的缺陷：默认恒为 None，于是系统永远按空账户
+                出建议——不知道你持有什么，因此支柱②没有真实成本与持有期，
+                "再持有 N 天免红利税"永远不出现，卖出建议一条也生不成。
         """
         self._settings = settings
         self._data = data or DataService(settings)
         self._intel = intel or IntelService(settings)
         self._llm = llm or LLMService(settings)
-        self._ledger = ledger
+        self._account = AccountService(settings)
+        self._ledger = ledger if ledger is not None else self._account.ledger()
         self._store = PlanStore(settings.var_dir / "plans")
         self._constraints = _constraints_from(settings)
         self._risk = RiskEngine(constraints=self._constraints)

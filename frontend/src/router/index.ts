@@ -8,6 +8,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 export const routes = [
   { path: '/', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '仪表盘', icon: 'P0' } },
+  { path: '/account', name: 'account', component: () => import('@/views/AccountView.vue'), meta: { title: '账户', icon: 'P1' } },
   { path: '/advisor', name: 'advisor', component: () => import('@/views/AdvisorView.vue'), meta: { title: '每日建议', icon: 'P2' } },
   { path: '/execution', name: 'execution', component: () => import('@/views/ExecutionView.vue'), meta: { title: '执行', icon: 'P3' } },
   { path: '/data', name: 'data', component: () => import('@/views/DataView.vue'), meta: { title: '数据', icon: 'P4' } },

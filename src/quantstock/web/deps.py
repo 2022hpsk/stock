@@ -16,6 +16,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from quantstock.config.settings import Settings
+from quantstock.services.account_service import AccountService
 from quantstock.services.advisor_service import AdvisorService
 from quantstock.services.backtest_service import BacktestService
 from quantstock.services.config_service import ConfigService
@@ -55,12 +56,20 @@ class AppState:
         self.config_service = ConfigService(settings.config_dir, settings.var_dir)
         self.system_service = SystemService(settings)
 
+        self._account: AccountService | None = None
         self._data: DataService | None = None
         self._advisor: AdvisorService | None = None
         self._execution: ExecutionService | None = None
         self._intel: IntelService | None = None
         self._llm: LLMService | None = None
         self._backtest: BacktestService | None = None
+
+    @property
+    def account(self) -> AccountService:
+        """账户服务。"""
+        if self._account is None:
+            self._account = AccountService(self.settings)
+        return self._account
 
     @property
     def data(self) -> DataService:

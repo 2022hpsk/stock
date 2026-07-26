@@ -25,6 +25,7 @@ from quantstock.infra.logging import get_logger
 from quantstock.web.deps import AppState, AuthDep, StateDep, WriteDep
 from quantstock.web.events import parse_channels
 from quantstock.web.routers import (
+    account_router,
     advisor_router,
     backtest_router,
     data_router,
@@ -122,6 +123,7 @@ def create_app(
     _register_websocket(app)
     for router in (
         data_router,
+        account_router,
         advisor_router,
         execution_router,
         intel_router,

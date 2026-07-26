@@ -311,3 +311,66 @@ class TestEventHub:
     )
     def test_parse_channels(self, raw: str | None, expected: set[str]) -> None:
         assert parse_channels(raw) == frozenset(expected)
+
+
+class TestAccountEndpoints:
+    """P1 账户页的接口。
+
+    **没有"修改持仓"的接口**是刻意的（红线 R8）：持仓由流水重放得出，
+    不是可以直接编辑的状态。
+    """
+
+    def test_empty_account_is_reported_not_crashed(self, client: TestClient) -> None:
+        body = client.get("/api/account/summary").json()
+        assert body["is_empty"] is True
+        assert body["position_count"] == 0
+        assert "账本为空" in body["message"]
+
+    def test_positions_and_transactions_start_empty(self, client: TestClient) -> None:
+        assert client.get("/api/account/positions").json()["positions"] == []
+        assert client.get("/api/account/transactions").json()["transactions"] == []
+
+    def test_deposit_then_trade_shows_up_in_positions(self, client: TestClient) -> None:
+        assert client.post("/api/account/deposit", json={"amount": "100000"}).status_code == 200
+        response = client.post(
+            "/api/account/trade",
+            json={"symbol": "600519.SH", "side": "buy", "qty": 100, "price": "500"},
+        )
+        assert response.status_code == 200, response.text
+
+        rows = client.get("/api/account/positions").json()["positions"]
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "600519.SH"
+        assert rows[0]["qty"] == 100
+        # 批次明细必须回给界面：红利税分档与免税倒计时都要靠它
+        assert rows[0]["lots"]
+
+    def test_amounts_come_back_as_strings(self, client: TestClient) -> None:
+        client.post("/api/account/deposit", json={"amount": "100000.55"})
+        summary = client.get("/api/account/summary").json()
+        assert summary["cash"] == "100000.55"
+
+    def test_illegal_trade_is_a_400_not_a_500(self, client: TestClient) -> None:
+        # 卖出超过持仓是用户输入错误，不是服务端故障
+        client.post("/api/account/deposit", json={"amount": "100000"})
+        response = client.post(
+            "/api/account/trade",
+            json={"symbol": "600519.SH", "side": "sell", "qty": 100, "price": "500"},
+        )
+        assert response.status_code == 400
+
+    def test_account_has_no_mutating_verbs(self, client: TestClient) -> None:
+        # 持仓是流水重放的结果，不该有 PUT / DELETE 这类"就地改状态"的路径。
+        # 全部写操作都必须表现为"追加一笔流水"（红线 R8）
+        mutating = {
+            (route.path, verb)
+            for route in client.app.routes  # type: ignore[attr-defined]
+            for verb in getattr(route, "methods", set())
+            if str(getattr(route, "path", "")).startswith("/api/account")
+            and verb in {"PUT", "PATCH", "DELETE"}
+        }
+        assert mutating == set()
+        assert client.put("/api/account/positions", json={}).status_code in {404, 405}
+
+    def test_writes_rejected_in_readonly(self, readonly_client: TestClient) -> None:
+        assert readonly_client.post("/api/account/deposit", json={"amount": "1"}).status_code == 403

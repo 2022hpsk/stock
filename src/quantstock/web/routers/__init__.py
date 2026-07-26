@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from quantstock.web.routers.account import router as account_router
 from quantstock.web.routers.advisor import router as advisor_router
 from quantstock.web.routers.backtest import router as backtest_router
 from quantstock.web.routers.data import router as data_router
@@ -15,6 +16,7 @@ from quantstock.web.routers.intel import router as intel_router
 from quantstock.web.routers.llm import router as llm_router
 
 __all__ = [
+    "account_router",
     "advisor_router",
     "backtest_router",
     "data_router",
