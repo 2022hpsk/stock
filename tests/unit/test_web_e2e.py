@@ -352,3 +352,92 @@ class TestExecutionFeedsReview:
         assert summary["total_executed"] > 0
         # 样本远不足十次，必须仍然拒绝给结论
         assert summary["has_enough_samples"] is False
+
+
+class TestAbortedExecution:
+    """被硬闸中止的执行。
+
+    绝对金额硬闸（A10）**中止整个计划而不是跳过那一笔**：单笔超限通常意味着
+    计算基数出错，此时其余单笔同样不可信。这条行为是对的，但它有两个
+    容易被忽略的副作用，下面各钉一条。
+    """
+
+    def _tiny_limit_client(self, seeded: Settings) -> TestClient:
+        """构造一个硬闸阈值极低的客户端。
+
+        Args:
+            seeded: 已备好数据的配置。
+
+        Returns:
+            测试客户端。
+        """
+        seeded.config.risk.hard_limits.max_single_order_amount = Decimal("1")
+        app = create_app(settings=seeded)
+        client = TestClient(app)
+        client.headers["X-Access-Token"] = app.state.app_state.access_token
+        return client
+
+    @staticmethod
+    def _run(client: TestClient, plan: dict[str, Any]) -> dict[str, Any]:
+        """全部接受地执行一份计划。
+
+        Args:
+            client: 测试客户端。
+            plan: 交易计划。
+
+        Returns:
+            执行报告。
+        """
+        body: dict[str, Any] = client.post(
+            "/api/execution/execute",
+            json={
+                "trade_date": plan["trade_date"],
+                "plan_id": plan["plan_id"],
+                "prices": {i["symbol"]: i["price_high"] for i in plan["intents"]},
+                "decisions": [
+                    {"intent_id": i["intent_id"], "accepted": True} for i in plan["intents"]
+                ],
+            },
+        ).json()
+        return body
+
+    def test_abort_is_reported_not_silent(self, seeded: Settings) -> None:
+        # 只回「提交 0 笔」而不说为什么，用户会以为系统坏了
+        client = self._tiny_limit_client(seeded)
+        plan = client.post("/api/advisor/advise", json={"save": True}).json()["plan"]
+        if not plan["intents"]:
+            pytest.skip("本次未产生建议")
+
+        body = self._run(client, plan)
+
+        assert body["aborted"] is True
+        assert "硬闸" in body["abort_reason"]
+        assert body["submitted"] == 0
+
+    def test_aborted_plan_is_not_marked_confirmed(self, seeded: Settings) -> None:
+        # 硬闸中止**不抛异常**而是返回 aborted=True，所以"先执行再标记确认"
+        # 挡不住它——一份被拦下、一笔都没发出的计划会被标成"已人工确认并执行"，
+        # 审计流水上再也分不清它到底有没有真的下过单
+        client = self._tiny_limit_client(seeded)
+        plan = client.post("/api/advisor/advise", json={"save": True}).json()["plan"]
+        if not plan["intents"]:
+            pytest.skip("本次未产生建议")
+
+        self._run(client, plan)
+
+        reloaded = client.get(f"/api/advisor/plan/{plan['trade_date']}").json()
+        assert reloaded["is_confirmed"] is False
+        assert reloaded["confirmed_by"] == ""
+
+    def test_aborted_execution_is_still_recorded(self, seeded: Settings) -> None:
+        # 被拦下来这件事本身就要留痕：事后要能查到"那天试过，被硬闸挡了"
+        client = self._tiny_limit_client(seeded)
+        plan = client.post("/api/advisor/advise", json={"save": True}).json()["plan"]
+        if not plan["intents"]:
+            pytest.skip("本次未产生建议")
+
+        self._run(client, plan)
+
+        deviation = client.get(f"/api/review/deviation/{plan['trade_date']}").json()
+        assert deviation["available"] is True
+        assert deviation["aborted"] is True

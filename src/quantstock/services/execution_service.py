@@ -266,9 +266,16 @@ class ExecutionService:
         )
         # 确认发生在执行之前，但记录放在这里：先让执行器把"必须显式 --live"
         # 之类的前置错误抛出来，避免为一次根本没发生的执行留下确认痕迹。
-        self._store.mark_confirmed(plan, confirmed_by=confirmed_by)
+        #
+        # 中止的执行同样不该留确认痕迹。硬闸中止**不抛异常**而是返回
+        # aborted=True，所以只靠上面那句"先执行再标记"挡不住它——
+        # 一份被硬闸拦下、一笔都没发出的计划，会被标成"已人工确认并执行"，
+        # 审计流水上再也分不清它到底有没有真的下过单。
+        if not report.aborted:
+            self._store.mark_confirmed(plan, confirmed_by=confirmed_by)
         # 报告必须落盘，否则一退出进程就没了——"计划 8 笔、执行 5 笔、
-        # 跳过的 3 笔各是什么原因"这类问题，事后就再也答不上来（docs/08 D3）
+        # 跳过的 3 笔各是什么原因"这类问题，事后就再也答不上来（docs/08 D3）。
+        # **中止的执行也要落盘**：被拦下来这件事本身就是要留痕的
         self._reports.append(report)
         _log.info(
             "execution_service_done",

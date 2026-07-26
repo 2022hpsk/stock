@@ -33,7 +33,18 @@ const live = ref(false)
 const acknowledged = ref(false)
 const confirmationCode = ref('')
 const busy = ref(false)
-const report = ref<Record<string, unknown> | null>(null)
+interface ExecutionReport {
+  aborted: boolean
+  abort_reason: string
+  submitted: number
+  skipped: number
+  total_amount: string
+  skip_reasons: Record<string, number>
+  manual_checklist: string[]
+  orders: Array<Record<string, unknown>>
+}
+
+const report = ref<ExecutionReport | null>(null)
 const errorMessage = ref('')
 
 const halted = computed(() => system.status?.halt.halted ?? false)
@@ -105,7 +116,7 @@ async function submit(): Promise<void> {
   busy.value = true
   errorMessage.value = ''
   try {
-    report.value = await api.post('/api/execution/execute', {
+    report.value = await api.post<ExecutionReport>('/api/execution/execute', {
       trade_date: plan.value.trade_date,
       plan_id: plan.value.plan_id,
       prices: prices.value,
@@ -120,7 +131,13 @@ async function submit(): Promise<void> {
         skip_note: d.skip_note,
       })),
     })
-    ElMessage.success('执行完成')
+    if (report.value?.aborted) {
+      // 硬闸中止时**一笔都没发出**。只显示「提交 0 笔」而不说为什么，
+      // 用户会以为是系统坏了，然后去别处绕过它
+      ElMessage.error('计划被中止，未提交任何委托')
+    } else {
+      ElMessage.success(`已提交 ${report.value?.submitted ?? 0} 笔`)
+    }
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : String(e)
   } finally {
@@ -310,12 +327,52 @@ onMounted(async () => {
 
     <el-card v-if="report" shadow="never" style="margin-top: 16px">
       <template #header>执行报告</template>
-      <pre class="qs-mono qs-report">{{ JSON.stringify(report, null, 2) }}</pre>
+
+      <!-- 中止必须最显眼。硬闸拦下整个计划时一笔都没发出，
+           而「提交 0 笔」这四个字看起来像是什么都没发生 -->
+      <el-alert
+        v-if="report.aborted"
+        type="error"
+        show-icon
+        :closable="false"
+        title="计划已被中止，未提交任何委托"
+        :description="`${report.abort_reason}。单笔超限通常意味着计算基数出错，此时其余单笔同样不可信——所以硬闸中止的是整个计划而不是那一笔。请到风控页核对硬闸阈值，或回到建议页检查账户总资产是否正确。`"
+        style="margin-bottom: 12px"
+      />
+      <el-descriptions v-else :column="4" border size="small" style="margin-bottom: 12px">
+        <el-descriptions-item label="已提交">{{ report.submitted }}</el-descriptions-item>
+        <el-descriptions-item label="已跳过">{{ report.skipped }}</el-descriptions-item>
+        <el-descriptions-item label="成交金额">
+          <span class="qs-mono">{{ report.total_amount }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="跳过原因">
+          {{ Object.keys(report.skip_reasons).length ? JSON.stringify(report.skip_reasons) : '无' }}
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <div v-if="report.manual_checklist.length" style="margin-bottom: 12px">
+        <div class="qs-sub">手工执行清单——请照此在券商 App 下单</div>
+        <ol class="qs-checklist">
+          <li v-for="(line, i) in report.manual_checklist" :key="i" class="qs-mono">{{ line }}</li>
+        </ol>
+      </div>
+
+      <el-collapse>
+        <el-collapse-item title="原始报告 JSON" name="raw">
+          <pre class="qs-mono qs-report">{{ JSON.stringify(report, null, 2) }}</pre>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
   </div>
 </template>
 
 <style scoped>
+.qs-checklist {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  line-height: 2;
+  font-size: 13px;
+}
 .qs-report {
   max-height: 420px;
   overflow: auto;
